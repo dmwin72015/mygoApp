@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"mygo-app/internal/captcha"
 	"mygo-app/internal/data"
 	"mygo-app/internal/domain"
 	"mygo-app/internal/server"
@@ -25,7 +26,7 @@ func setupTestServer(t *testing.T) (domain.Repo, *httptest.Server) {
 		t.Fatalf("setup database: %v", err)
 	}
 
-	srv := server.New(repo)
+	srv := server.New(repo, server.WithSkipCaptcha(true))
 	ts := httptest.NewServer(srv)
 	t.Cleanup(func() {
 		ts.Close()
@@ -352,6 +353,95 @@ func TestServerRequestID(t *testing.T) {
 	res2.Body.Close()
 	if res2.Header.Get("X-Request-ID") != "client-trace-12345" {
 		t.Fatalf("expected propagated X-Request-ID 'client-trace-12345', got: %s", res2.Header.Get("X-Request-ID"))
+	}
+}
+
+type mockCaptchaService struct {
+	expectedAnswer string
+	used           bool
+}
+
+func (m *mockCaptchaService) Generate() (captcha.Item, error) {
+	return captcha.Item{
+		ID:    "mock-captcha-123",
+		Image: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+	}, nil
+}
+
+func (m *mockCaptchaService) Verify(id, answer string) bool {
+	if m.used || id != "mock-captcha-123" || answer != m.expectedAnswer {
+		return false
+	}
+	m.used = true
+	return true
+}
+
+func TestServerCaptchaVerification(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "captcha_test.db")
+	repo, err := data.Open(ctx, data.Config{Driver: "sqlite", DSN: dbPath})
+	if err != nil {
+		t.Fatalf("setup database: %v", err)
+	}
+	defer repo.Close()
+
+	mockSvc := &mockCaptchaService{expectedAnswer: "42"}
+	srv := server.New(repo, server.WithCaptchaService(mockSvc))
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	// 1. GET /auth/captcha
+	res, err := http.Get(ts.URL + "/auth/captcha")
+	if err != nil {
+		t.Fatalf("GET /auth/captcha failed: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got: %d", res.StatusCode)
+	}
+
+	// 2. POST /auth/login with missing captcha code -> 400 Bad Request
+	bodyMissing := `{"username":"admin","password":"` + data.DefaultPassword + `"}`
+	res2, err := http.Post(ts.URL+"/auth/login", "application/json", strings.NewReader(bodyMissing))
+	if err != nil {
+		t.Fatalf("POST /auth/login failed: %v", err)
+	}
+	defer res2.Body.Close()
+	if res2.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for missing captcha, got: %d", res2.StatusCode)
+	}
+
+	// 3. POST /auth/login with wrong captcha code -> 400 Bad Request
+	bodyWrong := `{"username":"admin","password":"` + data.DefaultPassword + `","captcha_id":"mock-captcha-123","captcha_code":"99"}`
+	res3, err := http.Post(ts.URL+"/auth/login", "application/json", strings.NewReader(bodyWrong))
+	if err != nil {
+		t.Fatalf("POST /auth/login failed: %v", err)
+	}
+	defer res3.Body.Close()
+	if res3.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for wrong captcha, got: %d", res3.StatusCode)
+	}
+
+	// 4. POST /auth/login with correct captcha code -> 200 OK
+	bodyCorrect := `{"username":"admin","password":"` + data.DefaultPassword + `","captcha_id":"mock-captcha-123","captcha_code":"42"}`
+	res4, err := http.Post(ts.URL+"/auth/login", "application/json", strings.NewReader(bodyCorrect))
+	if err != nil {
+		t.Fatalf("POST /auth/login failed: %v", err)
+	}
+	defer res4.Body.Close()
+	if res4.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(res4.Body)
+		t.Fatalf("expected 200 OK for correct captcha, got: %d, body: %s", res4.StatusCode, string(raw))
+	}
+
+	// 5. POST /auth/login replaying the same captcha -> 400 Bad Request (consumed)
+	res5, err := http.Post(ts.URL+"/auth/login", "application/json", strings.NewReader(bodyCorrect))
+	if err != nil {
+		t.Fatalf("POST /auth/login replay failed: %v", err)
+	}
+	defer res5.Body.Close()
+	if res5.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for replayed captcha, got: %d", res5.StatusCode)
 	}
 }
 

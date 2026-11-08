@@ -25,6 +25,7 @@ func (s *Server) setupRoutes(r *gin.Engine) {
 	// 2. Authentication & Registration (Public)
 	auth := r.Group("/auth")
 	{
+		auth.GET("/captcha", s.handleAuthCaptcha)
 		auth.POST("/login", s.handleAuthLogin)
 		auth.POST("/reset-password", s.handleAuthResetPassword)
 		auth.POST("/register", s.handleAuthRegister)

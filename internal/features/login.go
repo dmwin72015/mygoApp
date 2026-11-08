@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"mygo-app/internal/captcha"
 	"mygo-app/internal/design"
 	"mygo-app/internal/design/tokens"
 	"mygo-app/internal/domain"
@@ -39,8 +40,14 @@ type Login struct {
 	mode loginMode
 
 	// Sign In fields
-	username string
-	password string
+	username       string
+	password       string
+	captchaID      string
+	captchaCode    string
+	captchaImg     ui.ImageSource
+	captchaLoading bool
+	captchaLoaded  bool
+	localCaptcha   captcha.Service
 
 	// Forgot Password fields
 	forgotUser      string
@@ -62,7 +69,74 @@ type Login struct {
 // NewLogin builds the sign-in screen. onSignedIn is called once per
 // successful login, from the frame that receives it.
 func NewLogin(repo domain.Repo, win design.Updater, onSignedIn func(domain.User)) *Login {
-	return &Login{repo: repo, win: win, onSignedIn: onSignedIn}
+	return &Login{
+		repo:         repo,
+		win:          win,
+		onSignedIn:   onSignedIn,
+		localCaptcha: captcha.NewMathCaptchaService(),
+	}
+}
+
+func (l *Login) refreshCaptcha() {
+	if l.captchaLoading {
+		return
+	}
+	l.captchaLoading = true
+	l.captchaCode = ""
+
+	// If running with local service, generate synchronously for instant rendering without race conditions
+	if _, isRemote := l.repo.(captcha.Provider); !isRemote && l.localCaptcha != nil {
+		item, err := l.localCaptcha.Generate()
+		if err == nil {
+			raw, decErr := captcha.ExtractPNGBytes(item.Image)
+			if decErr == nil {
+				l.captchaImg, _ = ui.DecodeImage(raw)
+			}
+			l.captchaID = item.ID
+			l.captchaLoaded = true
+		}
+		l.captchaLoading = false
+		return
+	}
+
+	win, repo := l.win, l.repo
+	go func() {
+		var item captcha.Item
+		var err error
+		if provider, ok := repo.(captcha.Provider); ok {
+			item, err = provider.GetCaptcha(context.Background())
+		}
+		if err != nil {
+			if win != nil {
+				win.Update(func() {
+					l.captchaLoading = false
+					l.err = err
+				})
+			} else {
+				l.captchaLoading = false
+				l.err = err
+			}
+			return
+		}
+		raw, decErr := captcha.ExtractPNGBytes(item.Image)
+		var imgSource ui.ImageSource
+		if decErr == nil {
+			imgSource, _ = ui.DecodeImage(raw)
+		}
+		if win != nil {
+			win.Update(func() {
+				l.captchaLoading = false
+				l.captchaLoaded = true
+				l.captchaID = item.ID
+				l.captchaImg = imgSource
+			})
+		} else {
+			l.captchaLoading = false
+			l.captchaLoaded = true
+			l.captchaID = item.ID
+			l.captchaImg = imgSource
+		}
+	}()
 }
 
 func (l *Login) submit() {
@@ -74,21 +148,84 @@ func (l *Login) submit() {
 		l.err = errors.New("请输入用户名和密码")
 		return
 	}
+	captchaCode := strings.TrimSpace(l.captchaCode)
+	if l.captchaID != "" && captchaCode == "" {
+		l.err = errors.New(i18n.T("err.captcha_req"))
+		return
+	}
+
+	// In standalone/local mode without remote API, verify captcha with local service
+	if _, isRemote := l.repo.(captcha.Provider); !isRemote && l.localCaptcha != nil && l.captchaID != "" {
+		if !l.localCaptcha.Verify(l.captchaID, captchaCode) {
+			l.err = errors.New(i18n.T("err.bad_captcha"))
+			l.refreshCaptcha()
+			return
+		}
+	}
+
 	l.busy, l.err = true, nil
-	win, repo, password := l.win, l.repo, l.password
+	win, repo, password, captchaID := l.win, l.repo, l.password, l.captchaID
 	go func() {
-		user, err := repo.Auth().Login(context.Background(), username, password)
-		win.Update(func() {
+		ctx := captcha.WithCredentials(context.Background(), captchaID, captchaCode)
+		user, err := repo.Auth().Login(ctx, username, password)
+		if win != nil {
+			win.Update(func() {
+				l.busy = false
+				l.password = ""
+				if err != nil {
+					l.err = err
+					l.refreshCaptcha()
+					return
+				}
+				l.err = nil
+				l.onSignedIn(user)
+			})
+		} else {
 			l.busy = false
 			l.password = ""
 			if err != nil {
 				l.err = err
+				l.refreshCaptcha()
 				return
 			}
 			l.err = nil
 			l.onSignedIn(user)
-		})
+		}
 	}()
+}
+
+// SignInForTest allows headless tests to trigger the sign in flow directly.
+func (l *Login) SignInForTest(username, password, captchaCode string) {
+	l.username = username
+	l.password = password
+	l.captchaCode = captchaCode
+	l.submit()
+}
+
+// SetCaptchaForTest injects a pre-set captcha ID and image for testing.
+func (l *Login) SetCaptchaForTest(id, code string, img ui.ImageSource) {
+	l.captchaID = id
+	l.captchaCode = code
+	l.captchaImg = img
+	l.captchaLoaded = true
+}
+
+// CaptchaID returns the current captcha ID.
+func (l *Login) CaptchaID() string {
+	return l.captchaID
+}
+
+// SetLocalCaptchaService configures the local captcha service (useful in tests).
+func (l *Login) SetLocalCaptchaService(svc captcha.Service) {
+	l.localCaptcha = svc
+}
+
+// FormError returns the current error message on the login card, if any.
+func (l *Login) FormError() string {
+	if l.err != nil {
+		return l.err.Error()
+	}
+	return ""
 }
 
 func (l *Login) submitForgot() {
@@ -199,6 +336,9 @@ func (l *Login) SignUpForTest(username, password, confirmPassword, displayName s
 // View draws the sign-in card in the middle of the window. The card rises
 // and settles as it appears, as the window opens.
 func (l *Login) View(c *ui.Context) {
+	if !l.captchaLoaded && !l.captchaLoading {
+		l.refreshCaptcha()
+	}
 	t := design.Theme(c)
 	tok := tokens.Get(c)
 
@@ -248,6 +388,32 @@ func (l *Login) renderSignInCard(c *ui.Context, t *ui.Theme, tok *tokens.Semanti
 			if ui.TextInput(c, &l.password).Password().Submitted() {
 				l.submit()
 			}
+		})
+		ui.Field(c, i18n.T("auth.captcha"), func() {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				if ui.TextInput(c, &l.captchaCode).Placeholder(i18n.T("auth.captcha_ph")).Width(160).Submitted() {
+					l.submit()
+				}
+				if l.captchaImg != nil {
+					if ui.Image(c, l.captchaImg).
+						Width(110).
+						Height(36).
+						Radius(4).
+						Cursor(ui.CursorPointer).
+						Tooltip(i18n.T("auth.captcha_refresh")).
+						Clicked() {
+						l.refreshCaptcha()
+					}
+				} else {
+					label := "获取验证码"
+					if l.captchaLoading {
+						label = "加载中…"
+					}
+					if ui.Button(c, label).Height(36).Disabled(l.captchaLoading).Clicked() {
+						l.refreshCaptcha()
+					}
+				}
+			})
 		})
 		ui.Row(c).Justify(ui.SpaceBetween).AlignItems(ui.Center).Children(func() {
 			if ui.Text(c, i18n.T("auth.no_account")).

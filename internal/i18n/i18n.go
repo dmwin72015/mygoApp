@@ -175,6 +175,8 @@ var translations = map[string]map[string]string{
 
 		// Server errors & status
 		"err.bad_credentials":    "用户名或密码不正确",
+		"err.bad_captcha":        "验证码错误或已过期",
+		"err.captcha_req":        "请输入验证码计算结果",
 		"err.unauthorized":       "未提供认证令牌或登录已失效",
 		"err.forbidden":          "无权执行该操作",
 		"err.not_found":          "记录未找到",
@@ -193,6 +195,9 @@ var translations = map[string]map[string]string{
 
 		// Registration & Auth UI
 		"auth.login_title":       "登录管理后台",
+		"auth.captcha":           "验证码",
+		"auth.captcha_ph":        "计算结果",
+		"auth.captcha_refresh":   "点击图片刷新验证码",
 		"auth.signup_title":      "创建新账号",
 		"auth.signup_sub":        "注册教务或教师账号，即时使用",
 		"auth.display_name":      "姓名 / 显示名",
@@ -279,6 +284,8 @@ var translations = map[string]map[string]string{
 
 		// Server errors & status
 		"err.bad_credentials":    "Invalid username or password",
+		"err.bad_captcha":        "Invalid or expired verification code",
+		"err.captcha_req":        "Please enter the captcha result",
 		"err.unauthorized":       "Authentication token missing or session expired",
 		"err.forbidden":          "Permission denied",
 		"err.not_found":          "Record not found",
@@ -297,6 +304,9 @@ var translations = map[string]map[string]string{
 
 		// Registration & Auth UI
 		"auth.login_title":       "Sign In to Admin",
+		"auth.captcha":           "Captcha",
+		"auth.captcha_ph":        "Answer",
+		"auth.captcha_refresh":   "Click image to refresh captcha",
 		"auth.signup_title":      "Create an Account",
 		"auth.signup_sub":        "Register a staff or teacher account",
 		"auth.display_name":      "Display Name",

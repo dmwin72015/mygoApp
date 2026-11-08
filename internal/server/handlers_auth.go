@@ -11,17 +11,46 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// handleAuthCaptcha handles GET /auth/captcha.
+func (s *Server) handleAuthCaptcha(c *gin.Context) {
+	if s.captcha == nil {
+		writeJSONError(c, http.StatusNotImplemented, "captcha service not configured")
+		return
+	}
+	item, err := s.captcha.Generate()
+	if err != nil {
+		writeJSONError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, item)
+}
+
 // handleAuthLogin handles POST /auth/login.
 func (s *Server) handleAuthLogin(c *gin.Context) {
 	lang := LangFromContext(c)
 	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
+		Username    string `json:"username"`
+		Password    string `json:"password"`
+		CaptchaID   string `json:"captcha_id"`
+		CaptchaCode string `json:"captcha_code"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		writeJSONError(c, http.StatusBadRequest, i18n.Tr(lang, "err.invalid_req"))
 		return
 	}
+
+	// Verify math arithmetic graphic captcha if enabled
+	if !s.skipCaptcha && s.captcha != nil {
+		if strings.TrimSpace(req.CaptchaCode) == "" {
+			writeJSONError(c, http.StatusBadRequest, i18n.Tr(lang, "err.captcha_req"))
+			return
+		}
+		if !s.captcha.Verify(req.CaptchaID, req.CaptchaCode) {
+			writeJSONError(c, http.StatusBadRequest, i18n.Tr(lang, "err.bad_captcha"))
+			return
+		}
+	}
+
 	user, err := s.repo.Auth().Login(c.Request.Context(), req.Username, req.Password)
 	if err != nil {
 		if errors.Is(err, domain.ErrBadCredentials) {

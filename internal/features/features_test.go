@@ -4,9 +4,11 @@ import (
 	"context"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
+	"mygo-app/internal/captcha"
 	"mygo-app/internal/data"
 	"mygo-app/internal/domain"
 	"mygo-app/internal/features"
@@ -334,6 +336,62 @@ func TestLoginSettingsButtonPlatform(t *testing.T) {
 	// On other platforms (windows, linux), it should appear.
 	if runtime.GOOS == "darwin" && found {
 		t.Errorf("expected settings button to be hidden on darwin login screen, but found it")
+	}
+}
+
+type mockFeatureCaptchaService struct {
+	expectedAnswer string
+}
+
+func (m *mockFeatureCaptchaService) Generate() (captcha.Item, error) {
+	return captcha.Item{
+		ID:    "mock-id-1",
+		Image: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+	}, nil
+}
+
+func (m *mockFeatureCaptchaService) Verify(id, answer string) bool {
+	return id == "mock-id-1" && answer == m.expectedAnswer
+}
+
+func TestLoginCaptchaFlow(t *testing.T) {
+	repo := openTestRepo(t)
+	u := newTestUpdater()
+	var signedInUser domain.User
+
+	login := features.NewLogin(repo, u, func(user domain.User) {
+		signedInUser = user
+	})
+	mockSvc := &mockFeatureCaptchaService{expectedAnswer: "77"}
+	login.SetLocalCaptchaService(mockSvc)
+
+	// 1. Initial render
+	tt := ui.NewTester(func(c *ui.Context) {
+		login.View(c)
+	}, 600, 500)
+
+	if _, ok := tt.Find("验证码"); !ok {
+		t.Fatal("expected '验证码' field on login card")
+	}
+
+	// 2. Submit with empty captcha
+	login.SignInForTest(data.DefaultUsername, data.DefaultPassword, "")
+	if !strings.Contains(login.FormError(), "验证码") {
+		t.Fatalf("expected captcha required error, got: %q", login.FormError())
+	}
+
+	// 3. Submit with wrong captcha
+	login.SignInForTest(data.DefaultUsername, data.DefaultPassword, "999")
+	if !strings.Contains(login.FormError(), "验证码错误") {
+		t.Fatalf("expected bad captcha error, got: %q", login.FormError())
+	}
+
+	// 4. Submit with correct captcha answer
+	login.SignInForTest(data.DefaultUsername, data.DefaultPassword, "77")
+	u.wait(t)
+
+	if signedInUser.Username != data.DefaultUsername {
+		t.Fatalf("expected signed in user %q, got: %q (err: %s)", data.DefaultUsername, signedInUser.Username, login.FormError())
 	}
 }
 

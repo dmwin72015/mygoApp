@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"mygo-app/internal/captcha"
 	"mygo-app/internal/domain"
 	"mygo-app/internal/i18n"
 )
@@ -129,6 +130,13 @@ func OpenRemote(baseURL, token string) domain.Repo {
 func (r *remoteRepo) Close() error   { return nil }
 func (r *remoteRepo) Source() string { return "远程 API · " + r.c.BaseURL }
 
+// GetCaptcha requests a fresh math arithmetic captcha challenge from the API.
+func (r *remoteRepo) GetCaptcha(ctx context.Context) (captcha.Item, error) {
+	var item captcha.Item
+	err := r.c.do(ctx, http.MethodGet, "/auth/captcha", nil, &item)
+	return item, err
+}
+
 func (r *remoteRepo) Auth() domain.Auth { return remoteAuth{r.c} }
 
 // remoteSettings keeps the app's preferences on the API, at /settings/{key}.
@@ -204,10 +212,15 @@ func (a remoteAuth) Login(ctx context.Context, username, password string) (domai
 		Token string      `json:"token"`
 		User  domain.User `json:"user"`
 	}
-	err := a.c.do(ctx, http.MethodPost, "/auth/login", map[string]string{
+	body := map[string]string{
 		"username": username,
 		"password": password,
-	}, &res)
+	}
+	if cred, ok := captcha.CredentialsFromContext(ctx); ok {
+		body["captcha_id"] = cred.ID
+		body["captcha_code"] = cred.Code
+	}
+	err := a.c.do(ctx, http.MethodPost, "/auth/login", body, &res)
 	if err != nil {
 		var apiErr *APIError
 		if errors.As(err, &apiErr) && apiErr.Status == http.StatusUnauthorized {
