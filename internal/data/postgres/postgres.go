@@ -15,12 +15,24 @@ import (
 )
 
 // Repo is the PostgreSQL implementation of domain.Repo.
+// It acts as the composition root that coordinates connection lifecycle,
+// database migrations, and assembles fully decoupled sub-stores.
 type Repo struct {
-	db  *sql.DB
-	dsn string
+	db         *sql.DB
+	dsn        string
+	txm        TxManager
+	students   *StudentStore
+	teachers   *TeacherStore
+	classrooms *ClassroomStore
+	courses    *CourseStore
+	lessons    *LessonStore
+	ledger     *LedgerStore
+	users      *UserStore
+	auth       *AuthStore
+	settings   *SettingsStore
 }
 
-// Open connects to PostgreSQL and verifies the schema via migrations.
+// Open connects to PostgreSQL, runs schema migrations, and wires together decoupled stores.
 func Open(ctx context.Context, dsn string) (domain.Repo, error) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -43,7 +55,32 @@ func Open(ctx context.Context, dsn string) (domain.Repo, error) {
 		return nil, fmt.Errorf("migrate postgres: %w", err)
 	}
 
-	r := &Repo{db: db, dsn: dsn}
+	// Wire decoupled components
+	txm := NewTxManager(db)
+	students := NewStudentStore(db)
+	teachers := NewTeacherStore(db)
+	classrooms := NewClassroomStore(db)
+	courses := NewCourseStore(db)
+	lessons := NewLessonStore(db)
+	ledger := NewLedgerStore(db, txm, students)
+	users := NewUserStore(db)
+	settings := NewSettingsStore(db)
+	auth := NewAuthStore(db, users, settings)
+
+	r := &Repo{
+		db:         db,
+		dsn:        dsn,
+		txm:        txm,
+		students:   students,
+		teachers:   teachers,
+		classrooms: classrooms,
+		courses:    courses,
+		lessons:    lessons,
+		ledger:     ledger,
+		users:      users,
+		auth:       auth,
+		settings:   settings,
+	}
 
 	if err := r.ensureAdmin(ctx); err != nil {
 		_ = db.Close()
@@ -66,15 +103,16 @@ func (r *Repo) Source() string {
 	return "PostgreSQL · " + SanitizeDSN(r.dsn)
 }
 
-func (r *Repo) Auth() domain.Auth                         { return pgAuthStore{r} }
-func (r *Repo) Settings() domain.Settings                 { return pgSettingsStore{r} }
-func (r *Repo) Users() domain.UserStore                   { return pgUserStore{r} }
-func (r *Repo) Students() domain.Store[domain.Student]     { return pgStudentStore{r} }
-func (r *Repo) Teachers() domain.Store[domain.Teacher]     { return pgTeacherStore{r} }
-func (r *Repo) Classrooms() domain.Store[domain.Classroom] { return pgClassroomStore{r} }
-func (r *Repo) Courses() domain.Store[domain.Course]       { return pgCourseStore{r} }
-func (r *Repo) Lessons() domain.Store[domain.Lesson]       { return pgLessonStore{r} }
-func (r *Repo) Ledger() domain.Ledger                      { return pgLedgerStore{r} }
+func (r *Repo) TxManager() TxManager                      { return r.txm }
+func (r *Repo) Auth() domain.Auth                         { return r.auth }
+func (r *Repo) Settings() domain.Settings                 { return r.settings }
+func (r *Repo) Users() domain.UserStore                   { return r.users }
+func (r *Repo) Students() domain.Store[domain.Student]     { return r.students }
+func (r *Repo) Teachers() domain.Store[domain.Teacher]     { return r.teachers }
+func (r *Repo) Classrooms() domain.Store[domain.Classroom] { return r.classrooms }
+func (r *Repo) Courses() domain.Store[domain.Course]       { return r.courses }
+func (r *Repo) Lessons() domain.Store[domain.Lesson]       { return r.lessons }
+func (r *Repo) Ledger() domain.Ledger                      { return r.ledger }
 
 func (r *Repo) Stats(ctx context.Context) (domain.Stats, error) {
 	var st domain.Stats

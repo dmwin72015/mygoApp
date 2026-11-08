@@ -10,16 +10,27 @@ import (
 	"mygo-app/internal/domain"
 )
 
-type pgLessonStore struct{ r *Repo }
+// LessonStore manages lessons in PostgreSQL.
+type LessonStore struct {
+	db DBTX
+}
 
-func (s pgLessonStore) List(ctx context.Context, q domain.Query) ([]domain.Lesson, error) {
+func NewLessonStore(db DBTX) *LessonStore {
+	return &LessonStore{db: db}
+}
+
+func (s *LessonStore) dbtx(ctx context.Context) DBTX {
+	return GetDBTX(ctx, s.db)
+}
+
+func (s *LessonStore) List(ctx context.Context, q domain.Query) ([]domain.Lesson, error) {
 	qb := NewQueryBuilder("SELECT id, code, course_id, teacher_id, classroom_id, start_at, minutes, status FROM lessons")
 	qb.WhereSearch(q.Search, "status", "code")
 	qb.OrderBy("start_at DESC")
 	qb.Limit(q.Limit)
 
 	query, args := qb.Build()
-	rows, err := s.r.db.QueryContext(ctx, query, args...)
+	rows, err := s.dbtx(ctx).QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -36,7 +47,7 @@ func (s pgLessonStore) List(ctx context.Context, q domain.Query) ([]domain.Lesso
 	return list, rows.Err()
 }
 
-func (s pgLessonStore) Get(ctx context.Context, idOrCode string) (domain.Lesson, error) {
+func (s *LessonStore) Get(ctx context.Context, idOrCode string) (domain.Lesson, error) {
 	var (
 		item  domain.Lesson
 		query string
@@ -50,7 +61,7 @@ func (s pgLessonStore) Get(ctx context.Context, idOrCode string) (domain.Lesson,
 		args = []any{idOrCode}
 	}
 
-	err := s.r.db.QueryRowContext(ctx, query, args...).Scan(
+	err := s.dbtx(ctx).QueryRowContext(ctx, query, args...).Scan(
 		&item.ID, &item.Code, &item.CourseID, &item.TeacherID, &item.ClassroomID, &item.StartAt, &item.Minutes, &item.Status,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -59,7 +70,7 @@ func (s pgLessonStore) Get(ctx context.Context, idOrCode string) (domain.Lesson,
 	return item, err
 }
 
-func (s pgLessonStore) Save(ctx context.Context, v *domain.Lesson) error {
+func (s *LessonStore) Save(ctx context.Context, v *domain.Lesson) error {
 	if v.Code == "" {
 		v.Code = domain.NewID("les")
 	}
@@ -71,7 +82,7 @@ func (s pgLessonStore) Save(ctx context.Context, v *domain.Lesson) error {
 	}
 
 	if v.ID == 0 {
-		return s.r.db.QueryRowContext(ctx,
+		return s.dbtx(ctx).QueryRowContext(ctx,
 			`INSERT INTO lessons (code, course_id, teacher_id, classroom_id, start_at, minutes, status)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7)
 			 RETURNING id`,
@@ -79,7 +90,7 @@ func (s pgLessonStore) Save(ctx context.Context, v *domain.Lesson) error {
 		).Scan(&v.ID)
 	}
 
-	res, err := s.r.db.ExecContext(ctx,
+	res, err := s.dbtx(ctx).ExecContext(ctx,
 		`UPDATE lessons SET
 			course_id = $1, teacher_id = $2, classroom_id = $3, start_at = $4, minutes = $5, status = $6
 		 WHERE id = $7`,
@@ -95,7 +106,7 @@ func (s pgLessonStore) Save(ctx context.Context, v *domain.Lesson) error {
 	return err
 }
 
-func (s pgLessonStore) Delete(ctx context.Context, idOrCode string) error {
+func (s *LessonStore) Delete(ctx context.Context, idOrCode string) error {
 	var (
 		query string
 		args  []any
@@ -108,7 +119,7 @@ func (s pgLessonStore) Delete(ctx context.Context, idOrCode string) error {
 		args = []any{idOrCode}
 	}
 
-	res, err := s.r.db.ExecContext(ctx, query, args...)
+	res, err := s.dbtx(ctx).ExecContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}

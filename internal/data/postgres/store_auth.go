@@ -10,14 +10,32 @@ import (
 	"mygo-app/internal/domain"
 )
 
-type pgAuthStore struct{ r *Repo }
+// AuthStore handles user authentication, password resets and self-registration.
+// It depends strictly on domain.UserStore and domain.Settings interfaces.
+type AuthStore struct {
+	db       DBTX
+	users    domain.UserStore
+	settings domain.Settings
+}
 
-func (a pgAuthStore) Login(ctx context.Context, username, password string) (domain.User, error) {
+func NewAuthStore(db DBTX, users domain.UserStore, settings domain.Settings) *AuthStore {
+	return &AuthStore{
+		db:       db,
+		users:    users,
+		settings: settings,
+	}
+}
+
+func (a *AuthStore) dbtx(ctx context.Context) DBTX {
+	return GetDBTX(ctx, a.db)
+}
+
+func (a *AuthStore) Login(ctx context.Context, username, password string) (domain.User, error) {
 	var (
 		u          domain.User
 		salt, hash string
 	)
-	err := a.r.db.QueryRowContext(ctx,
+	err := a.dbtx(ctx).QueryRowContext(ctx,
 		"SELECT id, code, username, display_name, role, salt, hash, created_at FROM users WHERE username = $1",
 		username,
 	).Scan(&u.ID, &u.Code, &u.Username, &u.DisplayName, &u.Role, &salt, &hash, &u.CreatedAt)
@@ -34,7 +52,7 @@ func (a pgAuthStore) Login(ctx context.Context, username, password string) (doma
 	return u, nil
 }
 
-func (a pgAuthStore) ResetPassword(ctx context.Context, username, recoveryKey, newPassword string) error {
+func (a *AuthStore) ResetPassword(ctx context.Context, username, recoveryKey, newPassword string) error {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return errors.New("请输入用户名")
@@ -49,7 +67,7 @@ func (a pgAuthStore) ResetPassword(ctx context.Context, username, recoveryKey, n
 	}
 
 	expectedKey := domain.DefaultRecoveryKey
-	savedKey, err := a.r.Settings().Get(ctx, domain.SettingsKeyRecoveryKey)
+	savedKey, err := a.settings.Get(ctx, domain.SettingsKeyRecoveryKey)
 	if err == nil && savedKey != "" {
 		expectedKey = savedKey
 	}
@@ -58,7 +76,7 @@ func (a pgAuthStore) ResetPassword(ctx context.Context, username, recoveryKey, n
 	}
 
 	var userID int64
-	err = a.r.db.QueryRowContext(ctx, "SELECT id FROM users WHERE username = $1", username).Scan(&userID)
+	err = a.dbtx(ctx).QueryRowContext(ctx, "SELECT id FROM users WHERE username = $1", username).Scan(&userID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.ErrUserNotFound
 	}
@@ -71,14 +89,14 @@ func (a pgAuthStore) ResetPassword(ctx context.Context, username, recoveryKey, n
 		return err
 	}
 
-	_, err = a.r.db.ExecContext(ctx,
+	_, err = a.dbtx(ctx).ExecContext(ctx,
 		"UPDATE users SET salt = $1, hash = $2 WHERE id = $3",
 		salt, hash, userID,
 	)
 	return err
 }
 
-func (a pgAuthStore) Register(ctx context.Context, username, password, displayName string) (domain.User, error) {
+func (a *AuthStore) Register(ctx context.Context, username, password, displayName string) (domain.User, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return domain.User{}, errors.New("用户名不能为空")
@@ -95,7 +113,7 @@ func (a pgAuthStore) Register(ctx context.Context, username, password, displayNa
 		DisplayName: displayName,
 		Role:        string(domain.RoleStaff),
 	}
-	if err := a.r.Users().Create(ctx, &user, password); err != nil {
+	if err := a.users.Create(ctx, &user, password); err != nil {
 		return domain.User{}, err
 	}
 	return user, nil

@@ -12,10 +12,21 @@ import (
 	"mygo-app/internal/domain"
 )
 
-type pgUserStore struct{ r *Repo }
+// UserStore manages users in PostgreSQL.
+type UserStore struct {
+	db DBTX
+}
 
-func (u pgUserStore) List(ctx context.Context) ([]domain.User, error) {
-	rows, err := u.r.db.QueryContext(ctx,
+func NewUserStore(db DBTX) *UserStore {
+	return &UserStore{db: db}
+}
+
+func (u *UserStore) dbtx(ctx context.Context) DBTX {
+	return GetDBTX(ctx, u.db)
+}
+
+func (u *UserStore) List(ctx context.Context) ([]domain.User, error) {
+	rows, err := u.dbtx(ctx).QueryContext(ctx,
 		"SELECT id, code, username, display_name, role, created_at FROM users ORDER BY id ASC",
 	)
 	if err != nil {
@@ -34,7 +45,7 @@ func (u pgUserStore) List(ctx context.Context) ([]domain.User, error) {
 	return list, rows.Err()
 }
 
-func (u pgUserStore) Create(ctx context.Context, v *domain.User, password string) error {
+func (u *UserStore) Create(ctx context.Context, v *domain.User, password string) error {
 	if strings.TrimSpace(v.Username) == "" {
 		return errors.New("用户名不能为空")
 	}
@@ -52,7 +63,7 @@ func (u pgUserStore) Create(ctx context.Context, v *domain.User, password string
 		v.CreatedAt = time.Now()
 	}
 
-	err = u.r.db.QueryRowContext(ctx,
+	err = u.dbtx(ctx).QueryRowContext(ctx,
 		`INSERT INTO users (code, username, display_name, role, salt, hash, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 RETURNING id`,
@@ -64,13 +75,13 @@ func (u pgUserStore) Create(ctx context.Context, v *domain.User, password string
 	return err
 }
 
-func (u pgUserStore) Update(ctx context.Context, v domain.User) error {
+func (u *UserStore) Update(ctx context.Context, v domain.User) error {
 	if v.Role != string(domain.RoleAdmin) {
 		if err := u.keepOneAdmin(ctx, v.ID); err != nil {
 			return err
 		}
 	}
-	res, err := u.r.db.ExecContext(ctx,
+	res, err := u.dbtx(ctx).ExecContext(ctx,
 		"UPDATE users SET display_name = $1, role = $2 WHERE id = $3",
 		v.DisplayName, v.Role, v.ID,
 	)
@@ -84,7 +95,7 @@ func (u pgUserStore) Update(ctx context.Context, v domain.User) error {
 	return err
 }
 
-func (u pgUserStore) resolveUserID(ctx context.Context, id any) (int64, error) {
+func (u *UserStore) resolveUserID(ctx context.Context, id any) (int64, error) {
 	switch v := id.(type) {
 	case int64:
 		if v > 0 {
@@ -99,7 +110,7 @@ func (u pgUserStore) resolveUserID(ctx context.Context, id any) (int64, error) {
 			return num, nil
 		}
 		var realID int64
-		err := u.r.db.QueryRowContext(ctx, "SELECT id FROM users WHERE code = $1 OR username = $2", v, v).Scan(&realID)
+		err := u.dbtx(ctx).QueryRowContext(ctx, "SELECT id FROM users WHERE code = $1 OR username = $2", v, v).Scan(&realID)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return 0, domain.ErrNotFound
@@ -111,7 +122,7 @@ func (u pgUserStore) resolveUserID(ctx context.Context, id any) (int64, error) {
 	return 0, domain.ErrNotFound
 }
 
-func (u pgUserStore) SetPassword(ctx context.Context, id any, password string) error {
+func (u *UserStore) SetPassword(ctx context.Context, id any, password string) error {
 	if len([]rune(password)) < 6 {
 		return errors.New("密码至少 6 位")
 	}
@@ -124,7 +135,7 @@ func (u pgUserStore) SetPassword(ctx context.Context, id any, password string) e
 	if err != nil {
 		return err
 	}
-	res, err := u.r.db.ExecContext(ctx, "UPDATE users SET salt = $1, hash = $2 WHERE id = $3", salt, hash, userID)
+	res, err := u.dbtx(ctx).ExecContext(ctx, "UPDATE users SET salt = $1, hash = $2 WHERE id = $3", salt, hash, userID)
 	if err != nil {
 		return err
 	}
@@ -135,7 +146,7 @@ func (u pgUserStore) SetPassword(ctx context.Context, id any, password string) e
 	return err
 }
 
-func (u pgUserStore) Delete(ctx context.Context, id any) error {
+func (u *UserStore) Delete(ctx context.Context, id any) error {
 	userID, err := u.resolveUserID(ctx, id)
 	if err != nil {
 		return err
@@ -143,7 +154,7 @@ func (u pgUserStore) Delete(ctx context.Context, id any) error {
 	if err := u.keepOneAdmin(ctx, userID); err != nil {
 		return err
 	}
-	res, err := u.r.db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", userID)
+	res, err := u.dbtx(ctx).ExecContext(ctx, "DELETE FROM users WHERE id = $1", userID)
 	if err != nil {
 		return err
 	}
@@ -154,9 +165,9 @@ func (u pgUserStore) Delete(ctx context.Context, id any) error {
 	return err
 }
 
-func (u pgUserStore) keepOneAdmin(ctx context.Context, id int64) error {
+func (u *UserStore) keepOneAdmin(ctx context.Context, id int64) error {
 	var remainingAdminCount int64
-	err := u.r.db.QueryRowContext(ctx,
+	err := u.dbtx(ctx).QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM users WHERE role = 'admin' AND id <> $1",
 		id,
 	).Scan(&remainingAdminCount)
@@ -168,7 +179,7 @@ func (u pgUserStore) keepOneAdmin(ctx context.Context, id int64) error {
 	}
 
 	var currentRole string
-	err = u.r.db.QueryRowContext(ctx, "SELECT role FROM users WHERE id = $1", id).Scan(&currentRole)
+	err = u.dbtx(ctx).QueryRowContext(ctx, "SELECT role FROM users WHERE id = $1", id).Scan(&currentRole)
 	if err != nil {
 		return err
 	}

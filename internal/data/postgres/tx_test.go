@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestTxRunner_LivePostgres(t *testing.T) {
+func TestTxManager_LivePostgres(t *testing.T) {
 	dsn := "postgres://postgres:root1234@127.0.0.1:15432/school?sslmode=disable"
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -23,37 +23,37 @@ func TestTxRunner_LivePostgres(t *testing.T) {
 		t.Skipf("skipping live postgres test: cannot reach %s (%v)", SanitizeDSN(dsn), err)
 	}
 
-	repo := &Repo{db: db, dsn: dsn}
+	txm := NewTxManager(db)
+	settings := NewSettingsStore(db)
+
+	var key = "test_tx_key"
 
 	// 1. Commit on success
-	var key = "test_tx_key"
-	err = repo.WithTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, "INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", key, "committed_val")
-		return err
+	err = txm.RunInTx(ctx, func(txCtx context.Context) error {
+		// Notice settings.Set automatically runs inside the transaction via txCtx!
+		return settings.Set(txCtx, key, "committed_val")
 	})
 	if err != nil {
-		t.Fatalf("WithTx commit failed: %v", err)
+		t.Fatalf("RunInTx commit failed: %v", err)
 	}
 
-	var val string
-	err = db.QueryRowContext(ctx, "SELECT value FROM settings WHERE key = $1", key).Scan(&val)
+	val, err := settings.Get(ctx, key)
 	if err != nil || val != "committed_val" {
 		t.Fatalf("expected 'committed_val', got %q (err: %v)", val, err)
 	}
 
 	// 2. Rollback on error
-	err = repo.WithTx(ctx, func(tx *sql.Tx) error {
-		_, execErr := tx.ExecContext(ctx, "UPDATE settings SET value = 'should_rollback' WHERE key = $1", key)
-		if execErr != nil {
-			return execErr
+	err = txm.RunInTx(ctx, func(txCtx context.Context) error {
+		if err := settings.Set(txCtx, key, "should_rollback"); err != nil {
+			return err
 		}
-		return errors.New("simulated failure")
+		return errors.New("simulated error")
 	})
 	if err == nil {
-		t.Fatalf("expected simulated failure error, got nil")
+		t.Fatalf("expected error, got nil")
 	}
 
-	err = db.QueryRowContext(ctx, "SELECT value FROM settings WHERE key = $1", key).Scan(&val)
+	val, err = settings.Get(ctx, key)
 	if err != nil || val != "committed_val" {
 		t.Fatalf("expected rollback to preserve 'committed_val', got %q", val)
 	}
@@ -65,15 +65,33 @@ func TestTxRunner_LivePostgres(t *testing.T) {
 				t.Fatalf("expected panic to be rethrown")
 			}
 		}()
-		_ = repo.WithTx(ctx, func(tx *sql.Tx) error {
-			_, _ = tx.ExecContext(ctx, "UPDATE settings SET value = 'panic_val' WHERE key = $1", key)
-			panic("something went terribly wrong")
+		_ = txm.RunInTx(ctx, func(txCtx context.Context) error {
+			_ = settings.Set(txCtx, key, "panic_val")
+			panic("something went wrong")
 		})
 	}()
 
-	err = db.QueryRowContext(ctx, "SELECT value FROM settings WHERE key = $1", key).Scan(&val)
+	val, err = settings.Get(ctx, key)
 	if err != nil || val != "committed_val" {
 		t.Fatalf("expected rollback after panic to preserve 'committed_val', got %q", val)
+	}
+
+	// 4. Nested / Reentrant transaction joins parent
+	err = txm.RunInTx(ctx, func(txCtx context.Context) error {
+		if err := settings.Set(txCtx, key, "parent_val"); err != nil {
+			return err
+		}
+		return txm.RunInTx(txCtx, func(nestedCtx context.Context) error {
+			return settings.Set(nestedCtx, key, "nested_val")
+		})
+	})
+	if err != nil {
+		t.Fatalf("nested RunInTx failed: %v", err)
+	}
+
+	val, err = settings.Get(ctx, key)
+	if err != nil || val != "nested_val" {
+		t.Fatalf("expected 'nested_val', got %q", val)
 	}
 
 	// Cleanup

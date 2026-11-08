@@ -5,45 +5,43 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
 	"mygo-app/internal/domain"
 )
 
-type pgLedgerStore struct{ r *Repo }
-
-func (l pgLedgerStore) resolveStudentID(ctx context.Context, q DBTX, studentID any) (int64, error) {
-	switch v := studentID.(type) {
-	case int64:
-		if v > 0 {
-			return v, nil
-		}
-	case int:
-		if v > 0 {
-			return int64(v), nil
-		}
-	case string:
-		if num, err := strconv.ParseInt(v, 10, 64); err == nil && num > 0 {
-			return num, nil
-		}
-		var realID int64
-		err := q.QueryRowContext(ctx, "SELECT id FROM students WHERE code = $1", v).Scan(&realID)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return 0, domain.ErrNotFound
-			}
-			return 0, err
-		}
-		return realID, nil
-	}
-	return 0, domain.ErrNotFound
+// StudentBalanceService abstracts operations on students required by Ledger.
+// This decouples the Ledger store from direct knowledge of the students table.
+type StudentBalanceService interface {
+	ResolveID(ctx context.Context, studentID any) (int64, error)
+	LockAndGetBalance(ctx context.Context, id int64) (int64, error)
+	UpdateBalance(ctx context.Context, id int64, newBalance int64) error
 }
 
-func (l pgLedgerStore) List(ctx context.Context, studentID any, limit int) ([]domain.LedgerEntry, error) {
+// LedgerStore manages financial ledger transactions in PostgreSQL.
+type LedgerStore struct {
+	db       DBTX
+	txm      TxManager
+	students StudentBalanceService
+}
+
+// NewLedgerStore creates a decoupled LedgerStore.
+func NewLedgerStore(db DBTX, txm TxManager, students StudentBalanceService) *LedgerStore {
+	return &LedgerStore{
+		db:       db,
+		txm:      txm,
+		students: students,
+	}
+}
+
+func (l *LedgerStore) dbtx(ctx context.Context) DBTX {
+	return GetDBTX(ctx, l.db)
+}
+
+func (l *LedgerStore) List(ctx context.Context, studentID any, limit int) ([]domain.LedgerEntry, error) {
 	qb := NewQueryBuilder("SELECT id, code, student_id, kind, amount_cents, balance_cents, note, at FROM ledger")
 	if studentID != nil && studentID != "" && studentID != int64(0) {
-		stuID, err := l.resolveStudentID(ctx, l.r.db, studentID)
+		stuID, err := l.students.ResolveID(ctx, studentID)
 		if err == nil {
 			qb.Where("student_id = ?", stuID)
 		}
@@ -52,7 +50,7 @@ func (l pgLedgerStore) List(ctx context.Context, studentID any, limit int) ([]do
 	qb.Limit(limit)
 
 	query, args := qb.Build()
-	rows, err := l.r.db.QueryContext(ctx, query, args...)
+	rows, err := l.dbtx(ctx).QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -69,42 +67,36 @@ func (l pgLedgerStore) List(ctx context.Context, studentID any, limit int) ([]do
 	return list, rows.Err()
 }
 
-func (l pgLedgerStore) TopUp(ctx context.Context, studentID any, amountCents int64, note string) (domain.LedgerEntry, error) {
+func (l *LedgerStore) TopUp(ctx context.Context, studentID any, amountCents int64, note string) (domain.LedgerEntry, error) {
 	if amountCents <= 0 {
 		return domain.LedgerEntry{}, errors.New("充值金额必须大于 0")
 	}
 	return l.apply(ctx, studentID, "topup", amountCents, note)
 }
 
-func (l pgLedgerStore) Consume(ctx context.Context, studentID any, amountCents int64, note string) (domain.LedgerEntry, error) {
+func (l *LedgerStore) Consume(ctx context.Context, studentID any, amountCents int64, note string) (domain.LedgerEntry, error) {
 	if amountCents <= 0 {
 		return domain.LedgerEntry{}, errors.New("扣费金额必须大于 0")
 	}
 	return l.apply(ctx, studentID, "consume", -amountCents, note)
 }
 
-func (l pgLedgerStore) apply(ctx context.Context, studentID any, kind string, delta int64, note string) (domain.LedgerEntry, error) {
+func (l *LedgerStore) apply(ctx context.Context, studentID any, kind string, delta int64, note string) (domain.LedgerEntry, error) {
 	var entry domain.LedgerEntry
 
-	err := l.r.WithTxLevel(ctx, sql.LevelReadCommitted, func(tx *sql.Tx) error {
-		stuID, err := l.resolveStudentID(ctx, tx, studentID)
+	err := l.txm.RunInTxLevel(ctx, sql.LevelReadCommitted, func(txCtx context.Context) error {
+		stuID, err := l.students.ResolveID(txCtx, studentID)
 		if err != nil {
 			return fmt.Errorf("student %v: %w", studentID, domain.ErrNotFound)
 		}
 
-		var currentBalance int64
-		err = tx.QueryRowContext(ctx, "SELECT balance_cents FROM students WHERE id = $1 FOR UPDATE", stuID).Scan(&currentBalance)
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("student %v: %w", studentID, domain.ErrNotFound)
-		}
+		currentBalance, err := l.students.LockAndGetBalance(txCtx, stuID)
 		if err != nil {
-			return err
+			return fmt.Errorf("student %v: %w", studentID, err)
 		}
 
 		newBalance := currentBalance + delta
-
-		_, err = tx.ExecContext(ctx, "UPDATE students SET balance_cents = $1 WHERE id = $2", newBalance, stuID)
-		if err != nil {
+		if err := l.students.UpdateBalance(txCtx, stuID, newBalance); err != nil {
 			return err
 		}
 
@@ -118,7 +110,7 @@ func (l pgLedgerStore) apply(ctx context.Context, studentID any, kind string, de
 			At:        time.Now(),
 		}
 
-		return tx.QueryRowContext(ctx,
+		return l.dbtx(txCtx).QueryRowContext(txCtx,
 			`INSERT INTO ledger (code, student_id, kind, amount_cents, balance_cents, note, at)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7)
 			 RETURNING id`,

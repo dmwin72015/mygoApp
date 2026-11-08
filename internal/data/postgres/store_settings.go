@@ -6,19 +6,30 @@ import (
 	"errors"
 )
 
-type pgSettingsStore struct{ r *Repo }
+// SettingsStore manages key-value configurations in PostgreSQL.
+type SettingsStore struct {
+	db DBTX
+}
 
-func (s pgSettingsStore) Get(ctx context.Context, key string) (string, error) {
+func NewSettingsStore(db DBTX) *SettingsStore {
+	return &SettingsStore{db: db}
+}
+
+func (s *SettingsStore) dbtx(ctx context.Context) DBTX {
+	return GetDBTX(ctx, s.db)
+}
+
+func (s *SettingsStore) Get(ctx context.Context, key string) (string, error) {
 	var val string
-	err := s.r.db.QueryRowContext(ctx, "SELECT value FROM settings WHERE key = $1", key).Scan(&val)
+	err := s.dbtx(ctx).QueryRowContext(ctx, "SELECT value FROM settings WHERE key = $1", key).Scan(&val)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
 	return val, err
 }
 
-func (s pgSettingsStore) Set(ctx context.Context, key, value string) error {
-	_, err := s.r.db.ExecContext(ctx,
+func (s *SettingsStore) Set(ctx context.Context, key, value string) error {
+	_, err := s.dbtx(ctx).ExecContext(ctx,
 		`INSERT INTO settings (key, value) VALUES ($1, $2)
 		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
 		key, value,
