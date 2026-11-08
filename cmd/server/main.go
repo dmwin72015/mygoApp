@@ -75,6 +75,9 @@ func main() {
 	}
 	defer repo.Close()
 
+	// Check or auto-provision administrator
+	checkOrProvisionAdmin(ctx, repo)
+
 	srv := server.New(repo)
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	httpServer := &http.Server{
@@ -95,7 +98,7 @@ func main() {
 		log.Printf("配置文件: %s", *configFlag)
 		log.Printf("数据库引擎: %s (%s)", driver, repo.Source())
 		log.Printf("监听地址: http://127.0.0.1%s", addr)
-		log.Printf("默认管理员账号: admin / admin123")
+		log.Printf("管理员管理: go run ./cmd/migrate create-admin")
 		log.Printf("客户端启动命令: SCHOOL_DRIVER=remote SCHOOL_API=http://127.0.0.1%s go run .", addr)
 		log.Printf("==================================================")
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -115,3 +118,39 @@ func main() {
 	_ = srv.Shutdown(shutdownCtx)
 	log.Println("Server stopped.")
 }
+
+// checkOrProvisionAdmin inspects if an admin account exists, and optionally auto-provisions
+// one if ADMIN_USERNAME and ADMIN_PASSWORD environment variables are set.
+func checkOrProvisionAdmin(ctx context.Context, repo domain.Repo) {
+	users, err := repo.Users().List(ctx)
+	if err != nil {
+		return
+	}
+	hasAdmin := false
+	for _, u := range users {
+		if u.Role == string(domain.RoleAdmin) {
+			hasAdmin = true
+			break
+		}
+	}
+
+	envUser := strings.TrimSpace(os.Getenv("ADMIN_USERNAME"))
+	envPass := strings.TrimSpace(os.Getenv("ADMIN_PASSWORD"))
+
+	if !hasAdmin {
+		if envUser != "" && envPass != "" {
+			admin := domain.User{
+				Username:    envUser,
+				DisplayName: "系统管理员",
+				Role:        string(domain.RoleAdmin),
+			}
+			if err := repo.Users().Create(ctx, &admin, envPass); err == nil {
+				log.Printf("[INIT] 已通过环境变量自动创建首个管理员账号: %s", envUser)
+				return
+			}
+		}
+		log.Printf("⚠️  [安全提示] 当前数据库中尚未创建管理员账号！")
+		log.Printf("👉 请使用运维命令创建: go run ./cmd/migrate create-admin")
+	}
+}
+

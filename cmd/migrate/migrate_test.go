@@ -65,4 +65,17 @@ func TestLivePostgresMigrateWorkflow(t *testing.T) {
 	if err := postgres.Migrate(ctx, db, "version"); err != nil {
 		t.Fatalf("version failed: %v", err)
 	}
+
+	// Test seed command
+	handleDBCommand(ctx, db, "postgres", "seed", "", "", "")
+
+	// Test create-admin command
+	handleDBCommand(ctx, db, "postgres", "create-admin", "admin", "admin123", "系统管理员")
+
+	// Verify admin exists
+	var role string
+	err = db.QueryRowContext(ctx, "SELECT role FROM users WHERE username = 'admin'").Scan(&role)
+	if err != nil || role != "admin" {
+		t.Fatalf("expected admin user created with role 'admin', got role=%q (err: %v)", role, err)
+	}
 }
