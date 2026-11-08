@@ -94,3 +94,35 @@ func TestOpenPostgresFailure(t *testing.T) {
 		t.Fatalf("expected error connecting to non-existent postgres, got nil")
 	}
 }
+
+func TestLivePostgresMigration(t *testing.T) {
+	dsn := "postgres://postgres:root1234@127.0.0.1:15432/school?sslmode=disable"
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Skip("skipping live postgres test: driver error")
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := db.PingContext(ctx); err != nil {
+		t.Skipf("skipping live postgres test: cannot reach %s (%v)", SanitizeDSN(dsn), err)
+	}
+
+	// Verify migrate up executes without error
+	if err := Migrate(ctx, db, "up"); err != nil {
+		t.Fatalf("Migrate up failed: %v", err)
+	}
+
+	// Verify tables exist
+	var count int
+	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM goose_db_version").Scan(&count)
+	if err != nil {
+		t.Fatalf("Query goose_db_version failed: %v", err)
+	}
+	if count == 0 {
+		t.Fatalf("Expected migration records in goose_db_version")
+	}
+}
+

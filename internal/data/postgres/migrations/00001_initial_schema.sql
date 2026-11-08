@@ -2,7 +2,8 @@
 -- SQL in this section is executed when the migration is applied.
 
 CREATE TABLE IF NOT EXISTS teachers (
-    id VARCHAR(64) PRIMARY KEY,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    code VARCHAR(64) NOT NULL UNIQUE,
     name VARCHAR(128) NOT NULL,
     phone VARCHAR(64) NOT NULL DEFAULT '',
     subject VARCHAR(128) NOT NULL DEFAULT '',
@@ -12,7 +13,8 @@ CREATE TABLE IF NOT EXISTS teachers (
 );
 
 CREATE TABLE IF NOT EXISTS students (
-    id VARCHAR(64) PRIMARY KEY,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    code VARCHAR(64) NOT NULL UNIQUE,
     name VARCHAR(128) NOT NULL,
     guardian VARCHAR(128) NOT NULL DEFAULT '',
     phone VARCHAR(64) NOT NULL DEFAULT '',
@@ -23,7 +25,8 @@ CREATE TABLE IF NOT EXISTS students (
 );
 
 CREATE TABLE IF NOT EXISTS classrooms (
-    id VARCHAR(64) PRIMARY KEY,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    code VARCHAR(64) NOT NULL UNIQUE,
     name VARCHAR(128) NOT NULL,
     capacity INTEGER NOT NULL DEFAULT 0,
     location VARCHAR(255) NOT NULL DEFAULT '',
@@ -31,10 +34,11 @@ CREATE TABLE IF NOT EXISTS classrooms (
 );
 
 CREATE TABLE IF NOT EXISTS courses (
-    id VARCHAR(64) PRIMARY KEY,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    code VARCHAR(64) NOT NULL UNIQUE,
     name VARCHAR(128) NOT NULL,
     subject VARCHAR(128) NOT NULL DEFAULT '',
-    teacher_id VARCHAR(64) NOT NULL DEFAULT '',
+    teacher_id BIGINT NOT NULL DEFAULT 0,
     total_lessons INTEGER NOT NULL DEFAULT 0,
     price_cents BIGINT NOT NULL DEFAULT 0,
     minutes INTEGER NOT NULL DEFAULT 0,
@@ -42,18 +46,20 @@ CREATE TABLE IF NOT EXISTS courses (
 );
 
 CREATE TABLE IF NOT EXISTS lessons (
-    id VARCHAR(64) PRIMARY KEY,
-    course_id VARCHAR(64) NOT NULL DEFAULT '',
-    teacher_id VARCHAR(64) NOT NULL DEFAULT '',
-    classroom_id VARCHAR(64) NOT NULL DEFAULT '',
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    code VARCHAR(64) NOT NULL UNIQUE,
+    course_id BIGINT NOT NULL DEFAULT 0,
+    teacher_id BIGINT NOT NULL DEFAULT 0,
+    classroom_id BIGINT NOT NULL DEFAULT 0,
     start_at TIMESTAMPTZ NOT NULL,
     minutes INTEGER NOT NULL DEFAULT 0,
     status VARCHAR(32) NOT NULL DEFAULT 'planned'
 );
 
 CREATE TABLE IF NOT EXISTS ledger (
-    id VARCHAR(64) PRIMARY KEY,
-    student_id VARCHAR(64) NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    code VARCHAR(64) NOT NULL UNIQUE,
+    student_id BIGINT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
     kind VARCHAR(32) NOT NULL,
     amount_cents BIGINT NOT NULL,
     balance_cents BIGINT NOT NULL,
@@ -62,7 +68,8 @@ CREATE TABLE IF NOT EXISTS ledger (
 );
 
 CREATE TABLE IF NOT EXISTS users (
-    id VARCHAR(64) PRIMARY KEY,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    code VARCHAR(64) NOT NULL UNIQUE,
     username VARCHAR(64) NOT NULL UNIQUE,
     display_name VARCHAR(128) NOT NULL DEFAULT '',
     role VARCHAR(32) NOT NULL DEFAULT 'staff',
@@ -72,19 +79,27 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE TABLE IF NOT EXISTS settings (
-    key VARCHAR(128) PRIMARY KEY,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    key VARCHAR(128) NOT NULL UNIQUE,
     value TEXT NOT NULL
 );
 
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_teachers_phone ON teachers(phone);
+CREATE INDEX IF NOT EXISTS idx_teachers_code ON teachers(code);
 CREATE INDEX IF NOT EXISTS idx_students_phone ON students(phone);
+CREATE INDEX IF NOT EXISTS idx_students_code ON students(code);
+CREATE INDEX IF NOT EXISTS idx_classrooms_code ON classrooms(code);
 CREATE INDEX IF NOT EXISTS idx_courses_teacher ON courses(teacher_id);
+CREATE INDEX IF NOT EXISTS idx_courses_code ON courses(code);
 CREATE INDEX IF NOT EXISTS idx_lessons_course ON lessons(course_id);
 CREATE INDEX IF NOT EXISTS idx_lessons_teacher ON lessons(teacher_id);
 CREATE INDEX IF NOT EXISTS idx_lessons_start_at ON lessons(start_at);
+CREATE INDEX IF NOT EXISTS idx_lessons_code ON lessons(code);
 CREATE INDEX IF NOT EXISTS idx_ledger_student_at ON ledger(student_id, at);
+CREATE INDEX IF NOT EXISTS idx_ledger_code ON ledger(code);
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_code ON users(code);
 
 -- +goose Down
 -- SQL in this section is executed when the migration is rolled back.
