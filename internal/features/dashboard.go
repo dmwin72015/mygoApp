@@ -22,8 +22,8 @@ type Dashboard struct {
 	stats    domain.Stats
 	lessons  []domain.Lesson
 	entries  []domain.LedgerEntry
-	students map[string]string
-	courses  map[string]string
+	students map[int64]string
+	courses  map[int64]string
 
 	loaded, busy bool
 	err          error
@@ -41,16 +41,16 @@ func (d *Dashboard) reload() {
 		ctx := context.Background()
 		stats, err := repo.Stats(ctx)
 		lessons, _ := repo.Lessons().List(ctx, domain.Query{})
-		entries, _ := repo.Ledger().List(ctx, "", 8)
+		entries, _ := repo.Ledger().List(ctx, 0, 8)
 		students, _ := repo.Students().List(ctx, domain.Query{})
 		courses, _ := repo.Courses().List(ctx, domain.Query{})
 		win.Update(func() {
 			d.stats, d.lessons, d.entries = stats, lessons, entries
-			d.students = make(map[string]string, len(students))
+			d.students = make(map[int64]string, len(students))
 			for _, v := range students {
 				d.students[v.ID] = v.Name
 			}
-			d.courses = make(map[string]string, len(courses))
+			d.courses = make(map[int64]string, len(courses))
 			for _, v := range courses {
 				d.courses[v.ID] = v.Name
 			}
@@ -223,7 +223,7 @@ func (s *Settings) View(c *ui.Context) {
 				FontSize(12).TextColor(t.TextMuted)
 		})
 
-		if s.self.ID != "" {
+		if s.self.ID != 0 {
 			design.SectionCard(c, i18n.T("settings.pwd_card"), nil, func() {
 				ui.Field(c, i18n.T("settings.pwd_old"), func() {
 					ui.TextInput(c, &s.oldPassword).Password().Placeholder(i18n.T("settings.pwd_old_ph"))

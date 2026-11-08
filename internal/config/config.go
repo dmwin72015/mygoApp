@@ -22,7 +22,7 @@ type ServerConfig struct {
 
 // DatabaseConfig holds connection parameters and pool settings.
 type DatabaseConfig struct {
-	Driver          string        `yaml:"driver"` // "postgres" | "sqlite"
+	Driver          string        `yaml:"driver"` // "postgres" | "mysql" | "sqlite"
 	DSN             string        `yaml:"dsn"`
 	MaxOpenConns    int           `yaml:"max_open_conns"`
 	MaxIdleConns    int           `yaml:"max_idle_conns"`
@@ -118,11 +118,13 @@ func Load(filePath string) (*Config, error) {
 		cfg.Migrate.Action = strings.ToLower(strings.TrimSpace(val))
 	}
 
-	// Auto-detect driver from DSN prefix if driver is not explicitly set
-	if cfg.Database.Driver == "" {
+	// Auto-detect driver from DSN prefix if driver is not explicitly set or matches other database formats
+	if cfg.Database.Driver == "" || (cfg.Database.Driver == "postgres" && (strings.HasPrefix(cfg.Database.DSN, "mysql://") || strings.Contains(cfg.Database.DSN, "@tcp(") || strings.HasSuffix(cfg.Database.DSN, ".db"))) {
 		if strings.HasPrefix(cfg.Database.DSN, "postgres://") || strings.HasPrefix(cfg.Database.DSN, "postgresql://") {
 			cfg.Database.Driver = "postgres"
-		} else {
+		} else if strings.HasPrefix(cfg.Database.DSN, "mysql://") || strings.Contains(cfg.Database.DSN, "@tcp(") {
+			cfg.Database.Driver = "mysql"
+		} else if strings.HasSuffix(cfg.Database.DSN, ".db") || strings.Contains(cfg.Database.DSN, "sqlite") {
 			cfg.Database.Driver = "sqlite"
 		}
 	}

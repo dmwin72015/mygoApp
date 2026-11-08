@@ -3,6 +3,7 @@ package features
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"mygo-app/internal/design"
@@ -19,9 +20,9 @@ type Courses struct {
 	canWrite bool
 
 	rows         []domain.Course
-	teacherNames map[string]string // ID -> Name
-	teacherIDs   map[string]string // Name -> ID
-	teacherOpts  []string          // options for SelectField
+	teacherNames map[int64]string // ID -> Name
+	teacherIDs   map[string]int64 // Name -> ID
+	teacherOpts  []string         // options for SelectField
 
 	loaded bool
 	busy   bool
@@ -48,8 +49,8 @@ func NewCourses(repo domain.Repo, win design.Updater, canWrite bool) *Courses {
 		win:          win,
 		canWrite:     canWrite,
 		sel:          -1,
-		teacherNames: make(map[string]string),
-		teacherIDs:   make(map[string]string),
+		teacherNames: make(map[int64]string),
+		teacherIDs:   make(map[string]int64),
 		teacherOpts:  []string{"未指定"},
 	}
 }
@@ -63,8 +64,8 @@ func (c *Courses) reload() {
 		rows, err := repo.Courses().List(ctx, query)
 		teachers, _ := repo.Teachers().List(ctx, domain.Query{})
 
-		tNames := make(map[string]string, len(teachers))
-		tIDs := make(map[string]string, len(teachers))
+		tNames := make(map[int64]string, len(teachers))
+		tIDs := make(map[string]int64, len(teachers))
 		opts := []string{"未指定"}
 		for _, t := range teachers {
 			tNames[t.ID] = t.Name
@@ -125,7 +126,7 @@ func (c *Courses) save() {
 	if c.selectedTeacher != "" && c.selectedTeacher != "未指定" {
 		c.draft.TeacherID = c.teacherIDs[c.selectedTeacher]
 	} else {
-		c.draft.TeacherID = ""
+		c.draft.TeacherID = 0
 	}
 
 	c.formErr = ""
@@ -145,11 +146,11 @@ func (c *Courses) save() {
 	}()
 }
 
-func (c *Courses) remove(id string) {
+func (c *Courses) remove(id int64) {
 	c.busy = true
 	win, repo := c.win, c.repo
 	go func() {
-		err := repo.Courses().Delete(context.Background(), id)
+		err := repo.Courses().Delete(context.Background(), strconv.FormatInt(id, 10))
 		win.Update(func() {
 			c.busy = false
 			if err != nil {
@@ -294,7 +295,7 @@ func (c *Courses) confirmDelete(ctx *ui.Context) {
 	if !design.Confirm(ctx, &c.askingDelete, "删除该课程？", "已售出该课程的学员记录将保留，但无法再被排课选用。", "删除") {
 		return
 	}
-	if c.draft.ID != "" {
+	if c.draft.ID != 0 {
 		c.remove(c.draft.ID)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -74,11 +75,11 @@ func TestServerE2E_FullFlow(t *testing.T) {
 	if err := client.Students().Save(ctx, &newStudent); err != nil {
 		t.Fatalf("create student: %v", err)
 	}
-	if newStudent.ID == "" {
+	if newStudent.ID == 0 {
 		t.Fatal("expected generated student ID")
 	}
 
-	gotStudent, err := client.Students().Get(ctx, newStudent.ID)
+	gotStudent, err := client.Students().Get(ctx, strconv.FormatInt(newStudent.ID, 10))
 	if err != nil || gotStudent.Name != "张测试" {
 		t.Fatalf("get student failed: %v, %+v", err, gotStudent)
 	}
@@ -200,3 +201,159 @@ func TestServerI18n_AcceptLanguage(t *testing.T) {
 		t.Errorf("expected English message 'Invalid username or password', got: %s", string(bodyEN))
 	}
 }
+
+func TestServerResetPassword(t *testing.T) {
+	_, ts := setupTestServer(t)
+	ctx := context.Background()
+	client := data.OpenRemote(ts.URL, "")
+
+	// 1. Wrong recovery key
+	err := client.Auth().ResetPassword(ctx, data.DefaultUsername, "bad-key", "newPassword123")
+	if !errors.Is(err, domain.ErrInvalidRecoveryKey) {
+		t.Fatalf("expected ErrInvalidRecoveryKey, got %v", err)
+	}
+
+	// 2. Non-existent user
+	err = client.Auth().ResetPassword(ctx, "ghost_user", domain.DefaultRecoveryKey, "newPassword123")
+	if !errors.Is(err, domain.ErrUserNotFound) {
+		t.Fatalf("expected ErrUserNotFound, got %v", err)
+	}
+
+	// 3. Successful reset
+	err = client.Auth().ResetPassword(ctx, data.DefaultUsername, domain.DefaultRecoveryKey, "adminNewPass666")
+	if err != nil {
+		t.Fatalf("expected successful reset, got %v", err)
+	}
+
+	// 4. Verify login with new password
+	u, err := client.Auth().Login(ctx, data.DefaultUsername, "adminNewPass666")
+	if err != nil {
+		t.Fatalf("login with new password failed: %v", err)
+	}
+	if u.Username != data.DefaultUsername {
+		t.Fatalf("unexpected user: %+v", u)
+	}
+}
+
+func TestServerAuth_Register(t *testing.T) {
+	_, ts := setupTestServer(t)
+	ctx := context.Background()
+	client := data.OpenRemote(ts.URL, "")
+
+	// 1. Successful registration via client
+	u, err := client.Auth().Register(ctx, "teacher_anna", "password123", "Anna Teacher")
+	if err != nil {
+		t.Fatalf("registration failed: %v", err)
+	}
+	if u.Username != "teacher_anna" || u.DisplayName != "Anna Teacher" || u.Role != string(domain.RoleStaff) {
+		t.Fatalf("unexpected registered user: %+v", u)
+	}
+
+	// 2. Client token was populated by Register, so authenticated requests work
+	_, err = client.Students().List(ctx, domain.Query{})
+	if err != nil {
+		t.Fatalf("request with auto-authenticated token failed: %v", err)
+	}
+
+	// 3. Duplicate registration via client should fail
+	_, err = client.Auth().Register(ctx, "teacher_anna", "password456", "Anna Another")
+	if err == nil {
+		t.Fatalf("expected error on duplicate registration, got nil")
+	}
+
+	// 4. Validation errors via raw HTTP requests
+	// 4a. Short password
+	shortBody := `{"username":"bob","password":"123","display_name":"Bob"}`
+	res, err := http.Post(ts.URL+"/auth/register", "application/json", strings.NewReader(shortBody))
+	if err != nil {
+		t.Fatalf("http request failed: %v", err)
+	}
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for short password, got %d", res.StatusCode)
+	}
+	res.Body.Close()
+
+	// 4b. Empty username
+	emptyUserBody := `{"username":"","password":"validpassword123","display_name":"Empty"}`
+	res, err = http.Post(ts.URL+"/auth/register", "application/json", strings.NewReader(emptyUserBody))
+	if err != nil {
+		t.Fatalf("http request failed: %v", err)
+	}
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for empty username, got %d", res.StatusCode)
+	}
+	res.Body.Close()
+
+	// 4c. Duplicate username returns 409 Conflict
+	dupBody := `{"username":"teacher_anna","password":"validpassword123","display_name":"Anna"}`
+	res, err = http.Post(ts.URL+"/auth/register", "application/json", strings.NewReader(dupBody))
+	if err != nil {
+		t.Fatalf("http request failed: %v", err)
+	}
+	if res.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict for duplicate username, got %d", res.StatusCode)
+	}
+	res.Body.Close()
+}
+
+func TestServerHealthAndPing(t *testing.T) {
+	_, ts := setupTestServer(t)
+
+	// 1. Test /ping
+	res, err := http.Get(ts.URL + "/ping")
+	if err != nil {
+		t.Fatalf("GET /ping failed: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for /ping, got %d", res.StatusCode)
+	}
+	body, _ := io.ReadAll(res.Body)
+	if !strings.Contains(string(body), "pong") {
+		t.Fatalf("expected 'pong' in response, got: %s", string(body))
+	}
+
+	// 2. Test /health
+	resH, err := http.Get(ts.URL + "/health")
+	if err != nil {
+		t.Fatalf("GET /health failed: %v", err)
+	}
+	defer resH.Body.Close()
+	if resH.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for /health, got %d", resH.StatusCode)
+	}
+	bodyH, _ := io.ReadAll(resH.Body)
+	if !strings.Contains(string(bodyH), `"status":"ok"`) || !strings.Contains(string(bodyH), `"db":"up"`) {
+		t.Fatalf("expected status:ok and db:up in health response, got: %s", string(bodyH))
+	}
+}
+
+func TestServerRequestID(t *testing.T) {
+	_, ts := setupTestServer(t)
+
+	// 1. Without incoming X-Request-ID (should auto-generate req_...)
+	res, err := http.Get(ts.URL + "/ping")
+	if err != nil {
+		t.Fatalf("GET /ping failed: %v", err)
+	}
+	res.Body.Close()
+	reqID := res.Header.Get("X-Request-ID")
+	if !strings.HasPrefix(reqID, "req_") {
+		t.Fatalf("expected auto-generated X-Request-ID starting with 'req_', got: %s", reqID)
+	}
+
+	// 2. With client-provided X-Request-ID (should propagate)
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/ping", nil)
+	req.Header.Set("X-Request-ID", "client-trace-12345")
+	res2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /ping with custom ID failed: %v", err)
+	}
+	res2.Body.Close()
+	if res2.Header.Get("X-Request-ID") != "client-trace-12345" {
+		t.Fatalf("expected propagated X-Request-ID 'client-trace-12345', got: %s", res2.Header.Get("X-Request-ID"))
+	}
+}
+
+
+

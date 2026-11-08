@@ -17,7 +17,7 @@ import (
 
 // Metrics, in DIPs.
 const (
-	PagePadding = tokens.SpaceXl
+	PagePadding = tokens.SpaceLg
 	CardPadding = tokens.SpaceLg
 	Gap         = tokens.SpaceMd
 	Radius      = tokens.RadiusLg
@@ -42,7 +42,7 @@ type PageProps struct {
 func Page(c *ui.Context, p PageProps, body func()) {
 	t, look := Theme(c), LookFor(c)
 	ui.Column(c).Fill().Background(look.Page).Children(func() {
-		ui.Row(c).Padding(PagePadding, PagePadding+4).Gap(Gap).AlignItems(ui.Center).
+		ui.Row(c).Padding(PagePadding+4, PagePadding+4).Gap(Gap).AlignItems(ui.Center).
 			BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Shrink(0).Children(func() {
 			ui.Column(c).Grow(1).Gap(3).MinWidth(0).Children(func() {
 				ui.Text(c, p.Title).FontSize(19).Bold()
@@ -298,6 +298,3 @@ var (
 func Table(c *ui.Context, s *ui.ListState, columns []ui.TableColumn, n int, cell func(row, col int)) ui.Element {
 	return components.ModernTable(c, s, columns, n, cell)
 }
-
-
-

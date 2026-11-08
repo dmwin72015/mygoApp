@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"mygo-app/internal/domain"
+
+	"github.com/egoist/mygo/ui"
 )
 
 // TestNavVisibility pins what each role sees in the sidebar: the menu is
@@ -69,3 +71,111 @@ func TestReportsRole(t *testing.T) {
 		t.Errorf("user name %q", s.UserName)
 	}
 }
+
+func TestAccountFooter(t *testing.T) {
+	s := New(domain.User{Username: "zhangsan_teacher", DisplayName: "张三丰特级名师", Role: string(domain.RoleStaff)})
+	settingsClicked := false
+	signOutClicked := false
+	s.OnOpenSettings = func() { settingsClicked = true }
+	s.OnSignOut = func() { signOutClicked = true }
+
+	tt := ui.NewTester(func(c *ui.Context) {
+		s.sidebar(c)
+	}, 300, 700)
+
+	// 1. User display name must be found on the trigger card
+	if _, ok := tt.Find("张三丰特级名师"); !ok {
+		t.Fatal("expected user name '张三丰特级名师' in sidebar footer")
+	}
+
+	// 2. Before click, popover is closed: settings option should not be visible
+	if _, ok := tt.Find("popover-settings"); ok {
+		t.Error("settings menu should not be open initially")
+	}
+
+	// 3. Click trigger to open dropdown
+	if err := tt.Click("用户菜单"); err != nil {
+		t.Fatalf("failed to click '用户菜单': %v", err)
+	}
+	tt.Frame()
+
+	// 4. Dropdown options should now be visible
+	if _, ok := tt.Find("设置"); !ok {
+		t.Fatal("expected '设置' in opened dropdown menu")
+	}
+	if _, ok := tt.Find("退出登录"); !ok {
+		t.Fatal("expected '退出登录' in opened dropdown menu")
+	}
+
+	// 5. Click "设置" item in dropdown
+	if err := tt.Click("设置"); err != nil {
+		t.Fatalf("failed to click '设置': %v", err)
+	}
+	if !settingsClicked {
+		t.Error("expected OnOpenSettings to be called on click")
+	}
+	if s.menuOpen {
+		t.Error("dropdown should close after clicking setting item")
+	}
+	tt.Frame()
+
+	// 6. Open dropdown again to test "退出登录" with secondary confirmation
+	if err := tt.Click("用户菜单"); err != nil {
+		t.Fatalf("failed to click '用户菜单' second time: %v", err)
+	}
+	tt.Frame()
+
+	// Click "退出登录" in dropdown menu -> should trigger confirmation dialog
+	if err := tt.Click("退出登录"); err != nil {
+		t.Fatalf("failed to click '退出登录': %v", err)
+	}
+	tt.Frame()
+
+	// OnSignOut should NOT have been called yet because confirmation dialog is pending
+	if signOutClicked {
+		t.Fatal("OnSignOut must not be called before confirmation")
+	}
+	if !s.askingSignOut {
+		t.Fatal("expected confirmation dialog askingSignOut to be true")
+	}
+
+	// Dialog title must be visible
+	if _, ok := tt.Find("退出登录确认"); !ok {
+		t.Fatal("expected '退出登录确认' dialog to be displayed")
+	}
+
+	// 7. Test Cancel in dialog
+	if err := tt.Click("取消"); err != nil {
+		t.Fatalf("failed to click '取消' in confirmation dialog: %v", err)
+	}
+	tt.Frame()
+	if signOutClicked {
+		t.Fatal("OnSignOut must not be called after clicking cancel")
+	}
+	if s.askingSignOut {
+		t.Fatal("confirmation dialog should be closed after clicking cancel")
+	}
+
+	// 8. Open dropdown and confirm sign-out
+	if err := tt.Click("用户菜单"); err != nil {
+		t.Fatalf("failed to click '用户菜单' third time: %v", err)
+	}
+	tt.Frame()
+
+	if err := tt.Click("退出登录"); err != nil {
+		t.Fatalf("failed to click '退出登录': %v", err)
+	}
+	tt.Frame()
+
+	// In the confirmation dialog, click "退出登录" button to confirm
+	if err := tt.Click("退出登录"); err != nil {
+		t.Fatalf("failed to click confirm '退出登录' in dialog: %v", err)
+	}
+	if !signOutClicked {
+		t.Error("expected OnSignOut to be called after confirmation")
+	}
+	if s.askingSignOut {
+		t.Error("dialog should close after confirming sign-out")
+	}
+}
+

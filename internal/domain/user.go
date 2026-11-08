@@ -7,7 +7,8 @@ import (
 
 // User represents an operator or administrator in the system.
 type User struct {
-	ID          string    `json:"id"`
+	ID          int64     `json:"id"`
+	Code        string    `json:"code"`
 	Username    string    `json:"username"`
 	DisplayName string    `json:"displayName"`
 	Role        string    `json:"role"`
@@ -22,9 +23,11 @@ func (u User) Name() string {
 	return u.Username
 }
 
-// Auth signs a user in.
+// Auth signs a user in, registers new accounts, or resets credentials with a recovery key.
 type Auth interface {
 	Login(ctx context.Context, username, password string) (User, error)
+	ResetPassword(ctx context.Context, username, recoveryKey, newPassword string) error
+	Register(ctx context.Context, username, password, displayName string) (User, error)
 }
 
 // UserStore manages user accounts.
@@ -34,6 +37,6 @@ type UserStore interface {
 	Create(ctx context.Context, u *User, password string) error
 	// Update changes display name and role.
 	Update(ctx context.Context, u User) error
-	SetPassword(ctx context.Context, id, password string) error
-	Delete(ctx context.Context, id string) error
+	SetPassword(ctx context.Context, id any, password string) error
+	Delete(ctx context.Context, id any) error
 }

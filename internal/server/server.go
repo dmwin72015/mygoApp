@@ -37,40 +37,9 @@ func New(repo domain.Repo, opts ...Option) *Server {
 		opt(s)
 	}
 
-	// Initialize Gin engine
+	// Initialize Gin engine and mount modular route groups
 	r := gin.New()
-	r.Use(gin.Recovery(), gin.Logger(), CORSMiddleware(), I18nMiddleware())
-
-	// 1. Public endpoints
-	r.POST("/auth/login", s.handleAuthLogin)
-
-	// 2. Protected endpoints (Bearer Token verified)
-	api := r.Group("/", AuthMiddleware(s.tokens))
-
-	// Overview Stats (all authenticated users)
-	api.GET("/stats", s.handleStatsGet)
-
-	// Collection Stores
-	registerCollectionRoutes(api, "/students", domain.PermStudents, s.repo.Students(),
-		func(v *domain.Student, id string) { v.ID = id })
-
-	registerCollectionRoutes(api, "/teachers", domain.PermTeachers, s.repo.Teachers(),
-		func(v *domain.Teacher, id string) { v.ID = id })
-
-	registerCollectionRoutes(api, "/classrooms", domain.PermClassrooms, s.repo.Classrooms(),
-		func(v *domain.Classroom, id string) { v.ID = id })
-
-	registerCollectionRoutes(api, "/courses", domain.PermCourses, s.repo.Courses(),
-		func(v *domain.Course, id string) { v.ID = id })
-
-	registerCollectionRoutes(api, "/lessons", domain.PermLessons, s.repo.Lessons(),
-		func(v *domain.Lesson, id string) { v.ID = id })
-
-	// Account management, Ledger and Settings
-	s.registerUserRoutes(api)
-	s.registerLedgerRoutes(api)
-	s.registerSettingsRoutes(api)
-
+	s.setupRoutes(r)
 	s.engine = r
 	return s
 }

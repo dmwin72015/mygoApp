@@ -11,6 +11,12 @@ import (
 	"mygo-app/internal/domain"
 )
 
+// Default admin credentials for initialized databases.
+const (
+	DefaultUsername = "admin"
+	DefaultPassword = "admin123"
+)
+
 // Config chooses and configures client-side data access.
 type Config struct {
 	// Driver is "sqlite" (default local) or "remote" (HTTP API).

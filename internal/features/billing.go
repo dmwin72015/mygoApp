@@ -29,7 +29,7 @@ type Billing struct {
 
 	tbl   ui.ListState
 	sel   int
-	selID string
+	selID int64
 
 	consume bool
 	// amountCents is what the money field edits, in cents.
@@ -60,10 +60,10 @@ func (b *Billing) reload() {
 		students, err := repo.Students().List(ctx, domain.Query{})
 		var entries []domain.LedgerEntry
 		if err == nil {
-			if id == "" && len(students) > 0 {
+			if id == 0 && len(students) > 0 {
 				id = students[0].ID
 			}
-			if id != "" {
+			if id != 0 {
 				entries, _ = repo.Ledger().List(ctx, id, 50)
 			}
 		}
@@ -80,7 +80,7 @@ func (b *Billing) reload() {
 
 func (b *Billing) reloadEntries() {
 	id := b.selID
-	if id == "" {
+	if id == 0 {
 		return
 	}
 	win, repo := b.win, b.repo

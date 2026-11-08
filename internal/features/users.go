@@ -113,7 +113,7 @@ func (u *Users) save() {
 	}()
 }
 
-func (u *Users) remove(id string) {
+func (u *Users) remove(id int64) {
 	u.busy = true
 	win, repo := u.win, u.repo
 	go func() {
@@ -265,7 +265,7 @@ func (u *Users) confirmDelete(c *ui.Context) {
 		fmt.Sprintf("「%s」将无法再登录，历史记录不受影响。", u.draft.Username), "删除") {
 		return
 	}
-	if u.draft.ID != "" {
+	if u.draft.ID != 0 {
 		u.remove(u.draft.ID)
 	}
 }

@@ -3,6 +3,7 @@ package features
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,12 +20,12 @@ type Lessons struct {
 	canWrite bool
 
 	rows        []domain.Lesson
-	courses     map[string]string // ID -> Name
-	teachers    map[string]string // ID -> Name
-	rooms       map[string]string // ID -> Name
-	courseIDs   map[string]string // Name -> ID
-	teacherIDs  map[string]string // Name -> ID
-	roomIDs     map[string]string // Name -> ID
+	courses     map[int64]string // ID -> Name
+	teachers    map[int64]string // ID -> Name
+	rooms       map[int64]string // ID -> Name
+	courseIDs   map[string]int64 // Name -> ID
+	teacherIDs  map[string]int64 // Name -> ID
+	roomIDs     map[string]int64 // Name -> ID
 	courseOpts  []string
 	teacherOpts []string
 	roomOpts    []string
@@ -55,12 +56,12 @@ func NewLessons(repo domain.Repo, win design.Updater, canWrite bool) *Lessons {
 		win:         win,
 		canWrite:    canWrite,
 		sel:         -1,
-		courses:     make(map[string]string),
-		teachers:    make(map[string]string),
-		rooms:       make(map[string]string),
-		courseIDs:   make(map[string]string),
-		teacherIDs:  make(map[string]string),
-		roomIDs:     make(map[string]string),
+		courses:     make(map[int64]string),
+		teachers:    make(map[int64]string),
+		rooms:       make(map[int64]string),
+		courseIDs:   make(map[string]int64),
+		teacherIDs:  make(map[string]int64),
+		roomIDs:     make(map[string]int64),
 		courseOpts:  []string{"未指定"},
 		teacherOpts: []string{"未指定"},
 		roomOpts:    []string{"未指定"},
@@ -78,21 +79,21 @@ func (p *Lessons) reload() {
 		teachers, _ := repo.Teachers().List(ctx, domain.Query{})
 		rooms, _ := repo.Classrooms().List(ctx, domain.Query{})
 
-		cMap, cIDs, cOpts := make(map[string]string), make(map[string]string), []string{"未指定"}
+		cMap, cIDs, cOpts := make(map[int64]string), make(map[string]int64), []string{"未指定"}
 		for _, v := range courses {
 			cMap[v.ID] = v.Name
 			cIDs[v.Name] = v.ID
 			cOpts = append(cOpts, v.Name)
 		}
 
-		tMap, tIDs, tOpts := make(map[string]string), make(map[string]string), []string{"未指定"}
+		tMap, tIDs, tOpts := make(map[int64]string), make(map[string]int64), []string{"未指定"}
 		for _, v := range teachers {
 			tMap[v.ID] = v.Name
 			tIDs[v.Name] = v.ID
 			tOpts = append(tOpts, v.Name)
 		}
 
-		rMap, rIDs, rOpts := make(map[string]string), make(map[string]string), []string{"未指定"}
+		rMap, rIDs, rOpts := make(map[int64]string), make(map[string]int64), []string{"未指定"}
 		for _, v := range rooms {
 			rMap[v.ID] = v.Name
 			rIDs[v.Name] = v.ID
@@ -177,12 +178,12 @@ func (p *Lessons) save() {
 	if p.selectedTeacher != "" && p.selectedTeacher != "未指定" {
 		p.draft.TeacherID = p.teacherIDs[p.selectedTeacher]
 	} else {
-		p.draft.TeacherID = ""
+		p.draft.TeacherID = 0
 	}
 	if p.selectedRoom != "" && p.selectedRoom != "未指定" {
 		p.draft.ClassroomID = p.roomIDs[p.selectedRoom]
 	} else {
-		p.draft.ClassroomID = ""
+		p.draft.ClassroomID = 0
 	}
 	switch p.selectedStatus {
 	case "已完成":
@@ -211,11 +212,11 @@ func (p *Lessons) save() {
 	}()
 }
 
-func (p *Lessons) remove(id string) {
+func (p *Lessons) remove(id int64) {
 	p.busy = true
 	win, repo := p.win, p.repo
 	go func() {
-		err := repo.Lessons().Delete(context.Background(), id)
+		err := repo.Lessons().Delete(context.Background(), strconv.FormatInt(id, 10))
 		win.Update(func() {
 			p.busy = false
 			if err != nil {
@@ -355,7 +356,7 @@ func (p *Lessons) confirmDelete(c *ui.Context) {
 	if !design.Confirm(c, &p.askingDelete, "删除该排课？", "删除排课记录后将从时间表移除，操作不可撤销。", "删除") {
 		return
 	}
-	if p.draft.ID != "" {
+	if p.draft.ID != 0 {
 		p.remove(p.draft.ID)
 	}
 }

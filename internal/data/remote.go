@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"mygo-app/internal/domain"
@@ -79,6 +80,9 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	}
 	res, err := c.HTTP.Do(req)
 	if err != nil {
+		if strings.Contains(err.Error(), "connection refused") || strings.Contains(err.Error(), "connect: connection refused") {
+			return fmt.Errorf("无法连接到服务端 (%s)，请确认后端服务已启动", c.BaseURL)
+		}
 		return fmt.Errorf("%s %s: %w", method, path, err)
 	}
 	defer res.Body.Close()
@@ -156,16 +160,22 @@ func (u remoteUsers) Create(ctx context.Context, v *domain.User, password string
 }
 
 func (u remoteUsers) Update(ctx context.Context, v domain.User) error {
-	return u.c.do(ctx, http.MethodPut, "/users/"+url.PathEscape(v.ID), v, nil)
+	idStr := strconv.FormatInt(v.ID, 10)
+	if v.ID == 0 {
+		idStr = v.Code
+	}
+	return u.c.do(ctx, http.MethodPut, "/users/"+url.PathEscape(idStr), v, nil)
 }
 
-func (u remoteUsers) SetPassword(ctx context.Context, id, password string) error {
-	return u.c.do(ctx, http.MethodPost, "/users/"+url.PathEscape(id)+"/password",
+func (u remoteUsers) SetPassword(ctx context.Context, id any, password string) error {
+	idStr := fmt.Sprint(id)
+	return u.c.do(ctx, http.MethodPost, "/users/"+url.PathEscape(idStr)+"/password",
 		map[string]string{"password": password}, nil)
 }
 
-func (u remoteUsers) Delete(ctx context.Context, id string) error {
-	return u.c.do(ctx, http.MethodDelete, "/users/"+url.PathEscape(id), nil, nil)
+func (u remoteUsers) Delete(ctx context.Context, id any) error {
+	idStr := fmt.Sprint(id)
+	return u.c.do(ctx, http.MethodDelete, "/users/"+url.PathEscape(idStr), nil, nil)
 }
 
 func (s remoteSettings) Get(ctx context.Context, key string) (string, error) {
@@ -212,10 +222,67 @@ func (a remoteAuth) Login(ctx context.Context, username, password string) (domai
 	return res.User, nil
 }
 
+func (a remoteAuth) ResetPassword(ctx context.Context, username, recoveryKey, newPassword string) error {
+	var res struct {
+		OK      bool   `json:"ok"`
+		Message string `json:"message"`
+	}
+	err := a.c.do(ctx, http.MethodPost, "/auth/reset-password", map[string]string{
+		"username":     username,
+		"recovery_key": recoveryKey,
+		"new_password": newPassword,
+	}, &res)
+	if err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) {
+			if apiErr.Status == http.StatusForbidden || strings.Contains(apiErr.Message, "安全恢复密钥") {
+				return domain.ErrInvalidRecoveryKey
+			}
+			if apiErr.Status == http.StatusNotFound || strings.Contains(apiErr.Message, "不存在") {
+				return domain.ErrUserNotFound
+			}
+			if apiErr.Message != "" {
+				return errors.New(apiErr.Message)
+			}
+		}
+		return err
+	}
+	return nil
+}
+
+func (a remoteAuth) Register(ctx context.Context, username, password, displayName string) (domain.User, error) {
+	var res struct {
+		Token string      `json:"token"`
+		User  domain.User `json:"user"`
+	}
+	err := a.c.do(ctx, http.MethodPost, "/auth/register", map[string]string{
+		"username":     username,
+		"password":     password,
+		"display_name": displayName,
+	}, &res)
+	if err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Message != "" {
+			return domain.User{}, errors.New(apiErr.Message)
+		}
+		return domain.User{}, err
+	}
+	if res.Token != "" {
+		a.c.Token = res.Token
+	}
+	return res.User, nil
+}
+
+
 func (r *remoteRepo) Students() domain.Store[domain.Student] {
 	return restStore[domain.Student]{
 		c: r.c, path: "/students",
-		id:  func(v *domain.Student) string { return v.ID },
+		id: func(v *domain.Student) string {
+			if v.ID > 0 {
+				return strconv.FormatInt(v.ID, 10)
+			}
+			return v.Code
+		},
 		new: func() *domain.Student { return &domain.Student{} },
 	}
 }
@@ -223,7 +290,12 @@ func (r *remoteRepo) Students() domain.Store[domain.Student] {
 func (r *remoteRepo) Teachers() domain.Store[domain.Teacher] {
 	return restStore[domain.Teacher]{
 		c: r.c, path: "/teachers",
-		id:  func(v *domain.Teacher) string { return v.ID },
+		id: func(v *domain.Teacher) string {
+			if v.ID > 0 {
+				return strconv.FormatInt(v.ID, 10)
+			}
+			return v.Code
+		},
 		new: func() *domain.Teacher { return &domain.Teacher{} },
 	}
 }
@@ -231,7 +303,12 @@ func (r *remoteRepo) Teachers() domain.Store[domain.Teacher] {
 func (r *remoteRepo) Classrooms() domain.Store[domain.Classroom] {
 	return restStore[domain.Classroom]{
 		c: r.c, path: "/classrooms",
-		id:  func(v *domain.Classroom) string { return v.ID },
+		id: func(v *domain.Classroom) string {
+			if v.ID > 0 {
+				return strconv.FormatInt(v.ID, 10)
+			}
+			return v.Code
+		},
 		new: func() *domain.Classroom { return &domain.Classroom{} },
 	}
 }
@@ -239,7 +316,12 @@ func (r *remoteRepo) Classrooms() domain.Store[domain.Classroom] {
 func (r *remoteRepo) Courses() domain.Store[domain.Course] {
 	return restStore[domain.Course]{
 		c: r.c, path: "/courses",
-		id:  func(v *domain.Course) string { return v.ID },
+		id: func(v *domain.Course) string {
+			if v.ID > 0 {
+				return strconv.FormatInt(v.ID, 10)
+			}
+			return v.Code
+		},
 		new: func() *domain.Course { return &domain.Course{} },
 	}
 }
@@ -247,7 +329,12 @@ func (r *remoteRepo) Courses() domain.Store[domain.Course] {
 func (r *remoteRepo) Lessons() domain.Store[domain.Lesson] {
 	return restStore[domain.Lesson]{
 		c: r.c, path: "/lessons",
-		id:  func(v *domain.Lesson) string { return v.ID },
+		id: func(v *domain.Lesson) string {
+			if v.ID > 0 {
+				return strconv.FormatInt(v.ID, 10)
+			}
+			return v.Code
+		},
 		new: func() *domain.Lesson { return &domain.Lesson{} },
 	}
 }
@@ -323,11 +410,11 @@ func (r restStore[T]) Delete(ctx context.Context, id string) error {
 
 type remoteLedger struct{ c *Client }
 
-func (l remoteLedger) List(ctx context.Context, studentID string, limit int) ([]domain.LedgerEntry, error) {
+func (l remoteLedger) List(ctx context.Context, studentID any, limit int) ([]domain.LedgerEntry, error) {
 	path := "/ledger"
 	v := url.Values{}
-	if studentID != "" {
-		v.Set("studentId", studentID)
+	if studentID != nil && studentID != "" && studentID != int64(0) {
+		v.Set("studentId", fmt.Sprint(studentID))
 	}
 	if limit > 0 {
 		v.Set("limit", strconv.Itoa(limit))
@@ -344,18 +431,18 @@ func (l remoteLedger) List(ctx context.Context, studentID string, limit int) ([]
 	return resp.Items, nil
 }
 
-func (l remoteLedger) TopUp(ctx context.Context, studentID string, amountCents int64, note string) (domain.LedgerEntry, error) {
+func (l remoteLedger) TopUp(ctx context.Context, studentID any, amountCents int64, note string) (domain.LedgerEntry, error) {
 	return l.move(ctx, "topup", studentID, amountCents, note)
 }
 
-func (l remoteLedger) Consume(ctx context.Context, studentID string, amountCents int64, note string) (domain.LedgerEntry, error) {
+func (l remoteLedger) Consume(ctx context.Context, studentID any, amountCents int64, note string) (domain.LedgerEntry, error) {
 	return l.move(ctx, "consume", studentID, amountCents, note)
 }
 
-func (l remoteLedger) move(ctx context.Context, kind, studentID string, amountCents int64, note string) (domain.LedgerEntry, error) {
+func (l remoteLedger) move(ctx context.Context, kind string, studentID any, amountCents int64, note string) (domain.LedgerEntry, error) {
 	var e domain.LedgerEntry
 	err := l.c.do(ctx, http.MethodPost, "/ledger/"+kind, map[string]any{
-		"studentId": studentID,
+		"studentId": fmt.Sprint(studentID),
 		"amount":    amountCents,
 		"note":      note,
 	}, &e)

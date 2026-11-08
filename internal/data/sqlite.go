@@ -2,11 +2,6 @@ package data
 
 import (
 	"context"
-	"crypto/pbkdf2"
-	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -14,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"mygo-app/internal/data/crypto"
 	"mygo-app/internal/domain"
 
 	"github.com/egoist/mygo/plugins/sqlite"
@@ -23,7 +19,8 @@ import (
 // migrations go here as the app grows, or a numbered migration table.
 var schema = []string{
 	`CREATE TABLE IF NOT EXISTS teachers (
-		id TEXT PRIMARY KEY,
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		code TEXT NOT NULL UNIQUE,
 		name TEXT NOT NULL,
 		phone TEXT NOT NULL DEFAULT '',
 		subject TEXT NOT NULL DEFAULT '',
@@ -31,7 +28,8 @@ var schema = []string{
 		active INTEGER NOT NULL DEFAULT 1,
 		created_at TEXT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS students (
-		id TEXT PRIMARY KEY,
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		code TEXT NOT NULL UNIQUE,
 		name TEXT NOT NULL,
 		guardian TEXT NOT NULL DEFAULT '',
 		phone TEXT NOT NULL DEFAULT '',
@@ -40,31 +38,35 @@ var schema = []string{
 		active INTEGER NOT NULL DEFAULT 1,
 		created_at TEXT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS classrooms (
-		id TEXT PRIMARY KEY,
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		code TEXT NOT NULL UNIQUE,
 		name TEXT NOT NULL,
 		capacity INTEGER NOT NULL DEFAULT 0,
 		location TEXT NOT NULL DEFAULT '',
 		note TEXT NOT NULL DEFAULT '')`,
 	`CREATE TABLE IF NOT EXISTS courses (
-		id TEXT PRIMARY KEY,
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		code TEXT NOT NULL UNIQUE,
 		name TEXT NOT NULL,
 		subject TEXT NOT NULL DEFAULT '',
-		teacher_id TEXT NOT NULL DEFAULT '',
+		teacher_id INTEGER NOT NULL DEFAULT 0,
 		total_lessons INTEGER NOT NULL DEFAULT 0,
 		price_cents INTEGER NOT NULL DEFAULT 0,
 		minutes INTEGER NOT NULL DEFAULT 0,
 		active INTEGER NOT NULL DEFAULT 1)`,
 	`CREATE TABLE IF NOT EXISTS lessons (
-		id TEXT PRIMARY KEY,
-		course_id TEXT NOT NULL DEFAULT '',
-		teacher_id TEXT NOT NULL DEFAULT '',
-		classroom_id TEXT NOT NULL DEFAULT '',
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		code TEXT NOT NULL UNIQUE,
+		course_id INTEGER NOT NULL DEFAULT 0,
+		teacher_id INTEGER NOT NULL DEFAULT 0,
+		classroom_id INTEGER NOT NULL DEFAULT 0,
 		start_at TEXT NOT NULL,
 		minutes INTEGER NOT NULL DEFAULT 0,
 		status TEXT NOT NULL DEFAULT 'planned')`,
 	`CREATE TABLE IF NOT EXISTS ledger (
-		id TEXT PRIMARY KEY,
-		student_id TEXT NOT NULL,
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		code TEXT NOT NULL UNIQUE,
+		student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
 		kind TEXT NOT NULL,
 		amount_cents INTEGER NOT NULL,
 		balance_cents INTEGER NOT NULL,
@@ -72,7 +74,8 @@ var schema = []string{
 		at TEXT NOT NULL)`,
 	`CREATE INDEX IF NOT EXISTS ledger_student ON ledger (student_id, at)`,
 	`CREATE TABLE IF NOT EXISTS users (
-		id TEXT PRIMARY KEY,
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		code TEXT NOT NULL UNIQUE,
 		username TEXT NOT NULL UNIQUE,
 		display_name TEXT NOT NULL DEFAULT '',
 		role TEXT NOT NULL DEFAULT '',
@@ -80,17 +83,15 @@ var schema = []string{
 		hash TEXT NOT NULL,
 		created_at TEXT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS settings (
-		key TEXT PRIMARY KEY,
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		key TEXT NOT NULL UNIQUE,
 		value TEXT NOT NULL)`,
 }
 
-// sqliteRepo is the local store: one file, no server, no cgo.
 type sqliteRepo struct {
 	db   *sqlite.DB
 	path string
-	// mu serializes the read-modify-write of a balance, which the
-	// plugin's connection does not make atomic on its own.
-	mu sync.Mutex
+	mu   sync.Mutex
 }
 
 func openSQLite(ctx context.Context, path string) (domain.Repo, error) {
@@ -156,85 +157,79 @@ func (r *sqliteRepo) Stats(ctx context.Context) (domain.Stats, error) {
 		}
 		*q.dst = int(n)
 	}
-	var err error
-	if st.Revenue, err = count("SELECT COALESCE(SUM(amount_cents), 0) FROM ledger WHERE kind = 'topup'"); err != nil {
+	rev, err := count("SELECT COALESCE(SUM(amount_cents), 0) FROM ledger WHERE kind = 'topup'")
+	if err != nil {
 		return st, err
 	}
-	if st.Outstanding, err = count("SELECT COALESCE(SUM(balance_cents), 0) FROM students"); err != nil {
+	st.Revenue = rev
+
+	out, err := count("SELECT COALESCE(SUM(balance_cents), 0) FROM students WHERE active = 1")
+	if err != nil {
 		return st, err
 	}
+	st.Outstanding = out
 	return st, nil
 }
 
-// seed fills an empty database with one of each, so that a first run has
-// something to show instead of empty tables.
 func (r *sqliteRepo) seed(ctx context.Context) error {
-	rows, err := r.db.Query(ctx, "SELECT COUNT(*) FROM students")
+	rows, err := r.db.Query(ctx, "SELECT COUNT(*) FROM teachers")
 	if err != nil {
 		return err
 	}
-	if len(rows.Values) == 1 && colInt(rows.Values[0][0]) > 0 {
+	if len(rows.Values) > 0 && colInt(rows.Values[0][0]) > 0 {
 		return nil
 	}
+
 	now := time.Now()
-	teachers := []domain.Teacher{
-		{ID: "tch_seed1", Name: "陈老师", Phone: "13800000001", Subject: "数学", RateCents: 18000, Active: true, CreatedAt: now.AddDate(0, -6, 0)},
-		{ID: "tch_seed2", Name: "林老师", Phone: "13800000002", Subject: "英语", RateCents: 16000, Active: true, CreatedAt: now.AddDate(0, -4, 0)},
-	}
-	for i := range teachers {
-		if err := r.Teachers().Save(ctx, &teachers[i]); err != nil {
+	tch1 := domain.Teacher{Code: "tch_seed1", Name: "陈静", Phone: "13800000001", Subject: "高中数学", RateCents: 20000, Active: true, CreatedAt: now.AddDate(0, -6, 0)}
+	tch2 := domain.Teacher{Code: "tch_seed2", Name: "李磊", Phone: "13800000002", Subject: "初中物理", RateCents: 18000, Active: true, CreatedAt: now.AddDate(0, -5, 0)}
+	tch3 := domain.Teacher{Code: "tch_seed3", Name: "王芳", Phone: "13800000003", Subject: "少儿英语", RateCents: 15000, Active: true, CreatedAt: now.AddDate(0, -4, 0)}
+	for _, t := range []*domain.Teacher{&tch1, &tch2, &tch3} {
+		if err := r.Teachers().Save(ctx, t); err != nil {
 			return err
 		}
 	}
-	rooms := []domain.Classroom{
-		{ID: "rom_seed1", Name: "A101", Capacity: 12, Location: "一楼东侧"},
-		{ID: "rom_seed2", Name: "B203", Capacity: 8, Location: "二楼"},
-	}
-	for i := range rooms {
-		if err := r.Classrooms().Save(ctx, &rooms[i]); err != nil {
+
+	rom1 := domain.Classroom{Code: "rom_seed1", Name: "文远楼 201", Capacity: 30, Location: "东校区二楼", Note: "配备多媒体投影"}
+	rom2 := domain.Classroom{Code: "rom_seed2", Name: "博雅楼 102", Capacity: 15, Location: "西校区一楼", Note: "小班 VIP 教室"}
+	for _, cr := range []*domain.Classroom{&rom1, &rom2} {
+		if err := r.Classrooms().Save(ctx, cr); err != nil {
 			return err
 		}
 	}
-	courses := []domain.Course{
-		{ID: "crs_seed1", Name: "初二数学同步", Subject: "数学", TeacherID: "tch_seed1", TotalLessons: 24, PriceCents: 480000, Minutes: 90, Active: true},
-		{ID: "crs_seed2", Name: "少儿英语启蒙", Subject: "英语", TeacherID: "tch_seed2", TotalLessons: 20, PriceCents: 360000, Minutes: 60, Active: true},
-	}
-	for i := range courses {
-		if err := r.Courses().Save(ctx, &courses[i]); err != nil {
+
+	crs1 := domain.Course{Code: "crs_seed1", Name: "初二数学同步培优", Subject: "初中数学", TeacherID: tch1.ID, TotalLessons: 24, PriceCents: 480000, Minutes: 90, Active: true}
+	crs2 := domain.Course{Code: "crs_seed2", Name: "少儿英语自然拼读", Subject: "少儿英语", TeacherID: tch3.ID, TotalLessons: 18, PriceCents: 360000, Minutes: 60, Active: true}
+	for _, c := range []*domain.Course{&crs1, &crs2} {
+		if err := r.Courses().Save(ctx, c); err != nil {
 			return err
 		}
 	}
-	students := []domain.Student{
-		{ID: "stu_seed1", Name: "王小明", Guardian: "王女士", Phone: "13900000001", Note: "周三、周五上课", Active: true, CreatedAt: now.AddDate(0, -3, 0)},
-		{ID: "stu_seed2", Name: "李思雨", Guardian: "李先生", Phone: "13900000002", Note: "需接送", Active: true, CreatedAt: now.AddDate(0, -2, 0)},
-		{ID: "stu_seed3", Name: "张浩然", Guardian: "张先生", Phone: "13900000003", Active: true, CreatedAt: now.AddDate(0, -1, 0)},
-	}
-	for i := range students {
-		if err := r.Students().Save(ctx, &students[i]); err != nil {
+
+	stu1 := domain.Student{Code: "stu_seed1", Name: "王小明", Guardian: "王女士", Phone: "13900000001", Note: "周三、周五上课", Active: true, CreatedAt: now.AddDate(0, -3, 0)}
+	stu2 := domain.Student{Code: "stu_seed2", Name: "李思雨", Guardian: "李先生", Phone: "13900000002", Note: "需接送", Active: true, CreatedAt: now.AddDate(0, -2, 0)}
+	stu3 := domain.Student{Code: "stu_seed3", Name: "张浩然", Guardian: "张先生", Phone: "13900000003", Note: "周末走读", Active: true, CreatedAt: now.AddDate(0, -1, 0)}
+	for _, s := range []*domain.Student{&stu1, &stu2, &stu3} {
+		if err := r.Students().Save(ctx, s); err != nil {
 			return err
 		}
 	}
-	// Two top-ups through the ledger, so that balance and history agree.
-	for _, p := range []struct {
-		id     string
-		amount int64
-		note   string
-	}{
-		{"stu_seed1", 480000, "报名初二数学同步"},
-		{"stu_seed2", 360000, "报名少儿英语启蒙"},
-		{"stu_seed3", 200000, "预存"},
-	} {
-		if _, err := r.Ledger().TopUp(ctx, p.id, p.amount, p.note); err != nil {
-			return err
-		}
+
+	if _, err := r.Ledger().TopUp(ctx, stu1.ID, 480000, "报名初二数学同步"); err != nil {
+		return err
 	}
-	lessons := []domain.Lesson{
-		{ID: "les_seed1", CourseID: "crs_seed1", TeacherID: "tch_seed1", ClassroomID: "rom_seed1", StartAt: now.Add(24 * time.Hour), Minutes: 90, Status: "planned"},
-		{ID: "les_seed2", CourseID: "crs_seed2", TeacherID: "tch_seed2", ClassroomID: "rom_seed2", StartAt: now.Add(48 * time.Hour), Minutes: 60, Status: "planned"},
-		{ID: "les_seed3", CourseID: "crs_seed1", TeacherID: "tch_seed1", ClassroomID: "rom_seed1", StartAt: now.Add(-72 * time.Hour), Minutes: 90, Status: "done"},
+	if _, err := r.Ledger().TopUp(ctx, stu2.ID, 360000, "报名少儿英语启蒙"); err != nil {
+		return err
 	}
-	for i := range lessons {
-		if err := r.Lessons().Save(ctx, &lessons[i]); err != nil {
+	if _, err := r.Ledger().TopUp(ctx, stu3.ID, 200000, "预存充值"); err != nil {
+		return err
+	}
+
+	les1 := domain.Lesson{Code: "les_seed1", CourseID: crs1.ID, TeacherID: tch1.ID, ClassroomID: rom1.ID, StartAt: now.Add(24 * time.Hour), Minutes: 90, Status: "planned"}
+	les2 := domain.Lesson{Code: "les_seed2", CourseID: crs2.ID, TeacherID: tch3.ID, ClassroomID: rom2.ID, StartAt: now.Add(48 * time.Hour), Minutes: 60, Status: "planned"}
+	les3 := domain.Lesson{Code: "les_seed3", CourseID: crs1.ID, TeacherID: tch1.ID, ClassroomID: rom1.ID, StartAt: now.Add(-72 * time.Hour), Minutes: 90, Status: "done"}
+	for _, l := range []*domain.Lesson{&les1, &les2, &les3} {
+		if err := r.Lessons().Save(ctx, l); err != nil {
 			return err
 		}
 	}
@@ -245,16 +240,16 @@ func (r *sqliteRepo) seed(ctx context.Context) error {
 
 type studentStore struct{ r *sqliteRepo }
 
-const studentCols = `id, name, guardian, phone, balance_cents, note, active, created_at`
+const studentCols = `id, code, name, guardian, phone, balance_cents, note, active, created_at`
 
 func (s studentStore) List(ctx context.Context, q domain.Query) ([]domain.Student, error) {
 	sql := `SELECT ` + studentCols + ` FROM students`
 	var args []any
 	if q.Search != "" {
-		sql += ` WHERE name LIKE ?1 OR phone LIKE ?1 OR guardian LIKE ?1`
+		sql += ` WHERE name LIKE ?1 OR phone LIKE ?1 OR guardian LIKE ?1 OR code LIKE ?1`
 		args = append(args, "%"+q.Search+"%")
 	}
-	sql += ` ORDER BY created_at DESC`
+	sql += ` ORDER BY id DESC`
 	if q.Limit > 0 {
 		sql += ` LIMIT ` + strconv.Itoa(q.Limit)
 	}
@@ -269,8 +264,16 @@ func (s studentStore) List(ctx context.Context, q domain.Query) ([]domain.Studen
 	return out, nil
 }
 
-func (s studentStore) Get(ctx context.Context, id string) (domain.Student, error) {
-	rows, err := s.r.db.Query(ctx, `SELECT `+studentCols+` FROM students WHERE id = ?`, id)
+func (s studentStore) Get(ctx context.Context, idOrCode string) (domain.Student, error) {
+	var (
+		rows sqlite.Rows
+		err  error
+	)
+	if num, e := strconv.ParseInt(idOrCode, 10, 64); e == nil && num > 0 {
+		rows, err = s.r.db.Query(ctx, `SELECT `+studentCols+` FROM students WHERE id = ?1 OR code = ?2`, num, idOrCode)
+	} else {
+		rows, err = s.r.db.Query(ctx, `SELECT `+studentCols+` FROM students WHERE code = ?1`, idOrCode)
+	}
 	if err != nil {
 		return domain.Student{}, err
 	}
@@ -280,43 +283,57 @@ func (s studentStore) Get(ctx context.Context, id string) (domain.Student, error
 	return scanStudent(rows.Values[0]), nil
 }
 
-// Save writes the profile only: a balance moves through the ledger, so that
-// every cent has a history entry.
 func (s studentStore) Save(ctx context.Context, v *domain.Student) error {
-	if v.ID == "" {
-		v.ID = domain.NewID("stu")
+	if strings.TrimSpace(v.Name) == "" {
+		return errors.New("姓名不能为空")
+	}
+	if v.Code == "" {
+		v.Code = domain.NewID("stu")
 	}
 	if v.CreatedAt.IsZero() {
 		v.CreatedAt = time.Now()
 	}
+
+	if v.ID == 0 {
+		res, err := s.r.db.Execute(ctx, `
+			INSERT INTO students (code, name, guardian, phone, balance_cents, note, active, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			v.Code, v.Name, v.Guardian, v.Phone, v.Balance, v.Note, b2i(v.Active), v.CreatedAt.Format(time.RFC3339))
+		if err != nil {
+			return err
+		}
+		v.ID = res.LastInsertID
+		return nil
+	}
+
 	_, err := s.r.db.Execute(ctx, `
-		INSERT INTO students (id, name, guardian, phone, balance_cents, note, active, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			name = excluded.name,
-			guardian = excluded.guardian,
-			phone = excluded.phone,
-			note = excluded.note,
-			active = excluded.active`,
-		v.ID, v.Name, v.Guardian, v.Phone, v.Balance, v.Note, b2i(v.Active), v.CreatedAt.Format(time.RFC3339))
+		UPDATE students SET
+			name = ?, guardian = ?, phone = ?, note = ?, active = ?
+		WHERE id = ?`,
+		v.Name, v.Guardian, v.Phone, v.Note, b2i(v.Active), v.ID)
 	return err
 }
 
-func (s studentStore) Delete(ctx context.Context, id string) error {
-	_, err := s.r.db.Execute(ctx, `DELETE FROM students WHERE id = ?`, id)
+func (s studentStore) Delete(ctx context.Context, idOrCode string) error {
+	if num, e := strconv.ParseInt(idOrCode, 10, 64); e == nil && num > 0 {
+		_, err := s.r.db.Execute(ctx, `DELETE FROM students WHERE id = ?1 OR code = ?2`, num, idOrCode)
+		return err
+	}
+	_, err := s.r.db.Execute(ctx, `DELETE FROM students WHERE code = ?1`, idOrCode)
 	return err
 }
 
 func scanStudent(v []any) domain.Student {
 	return domain.Student{
-		ID:        colString(at(v, 0)),
-		Name:      colString(at(v, 1)),
-		Guardian:  colString(at(v, 2)),
-		Phone:     colString(at(v, 3)),
-		Balance:   colInt(at(v, 4)),
-		Note:      colString(at(v, 5)),
-		Active:    colBool(at(v, 6)),
-		CreatedAt: colTime(at(v, 7)),
+		ID:        colInt(at(v, 0)),
+		Code:      colString(at(v, 1)),
+		Name:      colString(at(v, 2)),
+		Guardian:  colString(at(v, 3)),
+		Phone:     colString(at(v, 4)),
+		Balance:   colInt(at(v, 5)),
+		Note:      colString(at(v, 6)),
+		Active:    colBool(at(v, 7)),
+		CreatedAt: colTime(at(v, 8)),
 	}
 }
 
@@ -324,16 +341,16 @@ func scanStudent(v []any) domain.Student {
 
 type teacherStore struct{ r *sqliteRepo }
 
-const teacherCols = `id, name, phone, subject, rate_cents, active, created_at`
+const teacherCols = `id, code, name, phone, subject, rate_cents, active, created_at`
 
 func (s teacherStore) List(ctx context.Context, q domain.Query) ([]domain.Teacher, error) {
 	sql := `SELECT ` + teacherCols + ` FROM teachers`
 	var args []any
 	if q.Search != "" {
-		sql += ` WHERE name LIKE ?1 OR phone LIKE ?1 OR subject LIKE ?1`
+		sql += ` WHERE name LIKE ?1 OR phone LIKE ?1 OR subject LIKE ?1 OR code LIKE ?1`
 		args = append(args, "%"+q.Search+"%")
 	}
-	sql += ` ORDER BY created_at DESC`
+	sql += ` ORDER BY id DESC`
 	if q.Limit > 0 {
 		sql += ` LIMIT ` + strconv.Itoa(q.Limit)
 	}
@@ -343,69 +360,100 @@ func (s teacherStore) List(ctx context.Context, q domain.Query) ([]domain.Teache
 	}
 	out := make([]domain.Teacher, 0, len(rows.Values))
 	for _, v := range rows.Values {
-		out = append(out, domain.Teacher{
-			ID:        colString(at(v, 0)),
-			Name:      colString(at(v, 1)),
-			Phone:     colString(at(v, 2)),
-			Subject:   colString(at(v, 3)),
-			RateCents: colInt(at(v, 4)),
-			Active:    colBool(at(v, 5)),
-			CreatedAt: colTime(at(v, 6)),
-		})
+		out = append(out, scanTeacher(v))
 	}
 	return out, nil
 }
 
-func (s teacherStore) Get(ctx context.Context, id string) (domain.Teacher, error) {
-	rows, err := s.r.db.Query(ctx, `SELECT `+teacherCols+` FROM teachers WHERE id = ?`, id)
+func (s teacherStore) Get(ctx context.Context, idOrCode string) (domain.Teacher, error) {
+	var (
+		rows sqlite.Rows
+		err  error
+	)
+	if num, e := strconv.ParseInt(idOrCode, 10, 64); e == nil && num > 0 {
+		rows, err = s.r.db.Query(ctx, `SELECT `+teacherCols+` FROM teachers WHERE id = ?1 OR code = ?2`, num, idOrCode)
+	} else {
+		rows, err = s.r.db.Query(ctx, `SELECT `+teacherCols+` FROM teachers WHERE code = ?1`, idOrCode)
+	}
 	if err != nil {
 		return domain.Teacher{}, err
 	}
 	if len(rows.Values) == 0 {
 		return domain.Teacher{}, domain.ErrNotFound
 	}
-	v := rows.Values[0]
-	return domain.Teacher{
-		ID: colString(at(v, 0)), Name: colString(at(v, 1)), Phone: colString(at(v, 2)),
-		Subject: colString(at(v, 3)), RateCents: colInt(at(v, 4)), Active: colBool(at(v, 5)),
-		CreatedAt: colTime(at(v, 6)),
-	}, nil
+	return scanTeacher(rows.Values[0]), nil
 }
 
 func (s teacherStore) Save(ctx context.Context, v *domain.Teacher) error {
-	if v.ID == "" {
-		v.ID = domain.NewID("tch")
+	if strings.TrimSpace(v.Name) == "" {
+		return errors.New("姓名不能为空")
+	}
+	if v.Code == "" {
+		v.Code = domain.NewID("tch")
 	}
 	if v.CreatedAt.IsZero() {
 		v.CreatedAt = time.Now()
 	}
+
+	if v.ID == 0 {
+		res, err := s.r.db.Execute(ctx, `
+			INSERT INTO teachers (code, name, phone, subject, rate_cents, active, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			v.Code, v.Name, v.Phone, v.Subject, v.RateCents, b2i(v.Active), v.CreatedAt.Format(time.RFC3339))
+		if err != nil {
+			return err
+		}
+		v.ID = res.LastInsertID
+		return nil
+	}
+
 	_, err := s.r.db.Execute(ctx, `
-		INSERT INTO teachers (id, name, phone, subject, rate_cents, active, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			name = excluded.name, phone = excluded.phone, subject = excluded.subject,
-			rate_cents = excluded.rate_cents, active = excluded.active`,
-		v.ID, v.Name, v.Phone, v.Subject, v.RateCents, b2i(v.Active), v.CreatedAt.Format(time.RFC3339))
+		UPDATE teachers SET
+			name = ?, phone = ?, subject = ?, rate_cents = ?, active = ?
+		WHERE id = ?`,
+		v.Name, v.Phone, v.Subject, v.RateCents, b2i(v.Active), v.ID)
 	return err
 }
 
-func (s teacherStore) Delete(ctx context.Context, id string) error {
-	_, err := s.r.db.Execute(ctx, `DELETE FROM teachers WHERE id = ?`, id)
+func (s teacherStore) Delete(ctx context.Context, idOrCode string) error {
+	if num, e := strconv.ParseInt(idOrCode, 10, 64); e == nil && num > 0 {
+		_, err := s.r.db.Execute(ctx, `DELETE FROM teachers WHERE id = ?1 OR code = ?2`, num, idOrCode)
+		return err
+	}
+	_, err := s.r.db.Execute(ctx, `DELETE FROM teachers WHERE code = ?1`, idOrCode)
 	return err
+}
+
+func scanTeacher(v []any) domain.Teacher {
+	return domain.Teacher{
+		ID:        colInt(at(v, 0)),
+		Code:      colString(at(v, 1)),
+		Name:      colString(at(v, 2)),
+		Phone:     colString(at(v, 3)),
+		Subject:   colString(at(v, 4)),
+		RateCents: colInt(at(v, 5)),
+		Active:    colBool(at(v, 6)),
+		CreatedAt: colTime(at(v, 7)),
+	}
 }
 
 // ─── classrooms ─────────────────────────────────────────────────────────
 
 type classroomStore struct{ r *sqliteRepo }
 
+const classroomCols = `id, code, name, capacity, location, note`
+
 func (s classroomStore) List(ctx context.Context, q domain.Query) ([]domain.Classroom, error) {
-	sql := `SELECT id, name, capacity, location, note FROM classrooms`
+	sql := `SELECT ` + classroomCols + ` FROM classrooms`
 	var args []any
 	if q.Search != "" {
-		sql += ` WHERE name LIKE ?1 OR location LIKE ?1`
+		sql += ` WHERE name LIKE ?1 OR location LIKE ?1 OR code LIKE ?1`
 		args = append(args, "%"+q.Search+"%")
 	}
-	sql += ` ORDER BY name`
+	sql += ` ORDER BY id ASC`
+	if q.Limit > 0 {
+		sql += ` LIMIT ` + strconv.Itoa(q.Limit)
+	}
 	rows, err := s.r.db.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
@@ -417,8 +465,16 @@ func (s classroomStore) List(ctx context.Context, q domain.Query) ([]domain.Clas
 	return out, nil
 }
 
-func (s classroomStore) Get(ctx context.Context, id string) (domain.Classroom, error) {
-	rows, err := s.r.db.Query(ctx, `SELECT id, name, capacity, location, note FROM classrooms WHERE id = ?`, id)
+func (s classroomStore) Get(ctx context.Context, idOrCode string) (domain.Classroom, error) {
+	var (
+		rows sqlite.Rows
+		err  error
+	)
+	if num, e := strconv.ParseInt(idOrCode, 10, 64); e == nil && num > 0 {
+		rows, err = s.r.db.Query(ctx, `SELECT `+classroomCols+` FROM classrooms WHERE id = ?1 OR code = ?2`, num, idOrCode)
+	} else {
+		rows, err = s.r.db.Query(ctx, `SELECT `+classroomCols+` FROM classrooms WHERE code = ?1`, idOrCode)
+	}
 	if err != nil {
 		return domain.Classroom{}, err
 	}
@@ -429,27 +485,50 @@ func (s classroomStore) Get(ctx context.Context, id string) (domain.Classroom, e
 }
 
 func (s classroomStore) Save(ctx context.Context, v *domain.Classroom) error {
-	if v.ID == "" {
-		v.ID = domain.NewID("rom")
+	if strings.TrimSpace(v.Name) == "" {
+		return errors.New("教室名称不能为空")
 	}
+	if v.Code == "" {
+		v.Code = domain.NewID("rom")
+	}
+
+	if v.ID == 0 {
+		res, err := s.r.db.Execute(ctx, `
+			INSERT INTO classrooms (code, name, capacity, location, note)
+			VALUES (?, ?, ?, ?, ?)`,
+			v.Code, v.Name, v.Capacity, v.Location, v.Note)
+		if err != nil {
+			return err
+		}
+		v.ID = res.LastInsertID
+		return nil
+	}
+
 	_, err := s.r.db.Execute(ctx, `
-		INSERT INTO classrooms (id, name, capacity, location, note) VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			name = excluded.name, capacity = excluded.capacity,
-			location = excluded.location, note = excluded.note`,
-		v.ID, v.Name, v.Capacity, v.Location, v.Note)
+		UPDATE classrooms SET
+			name = ?, capacity = ?, location = ?, note = ?
+		WHERE id = ?`,
+		v.Name, v.Capacity, v.Location, v.Note, v.ID)
 	return err
 }
 
-func (s classroomStore) Delete(ctx context.Context, id string) error {
-	_, err := s.r.db.Execute(ctx, `DELETE FROM classrooms WHERE id = ?`, id)
+func (s classroomStore) Delete(ctx context.Context, idOrCode string) error {
+	if num, e := strconv.ParseInt(idOrCode, 10, 64); e == nil && num > 0 {
+		_, err := s.r.db.Execute(ctx, `DELETE FROM classrooms WHERE id = ?1 OR code = ?2`, num, idOrCode)
+		return err
+	}
+	_, err := s.r.db.Execute(ctx, `DELETE FROM classrooms WHERE code = ?1`, idOrCode)
 	return err
 }
 
 func scanClassroom(v []any) domain.Classroom {
 	return domain.Classroom{
-		ID: colString(at(v, 0)), Name: colString(at(v, 1)),
-		Capacity: int(colInt(at(v, 2))), Location: colString(at(v, 3)), Note: colString(at(v, 4)),
+		ID:       colInt(at(v, 0)),
+		Code:     colString(at(v, 1)),
+		Name:     colString(at(v, 2)),
+		Capacity: int(colInt(at(v, 3))),
+		Location: colString(at(v, 4)),
+		Note:     colString(at(v, 5)),
 	}
 }
 
@@ -457,16 +536,19 @@ func scanClassroom(v []any) domain.Classroom {
 
 type courseStore struct{ r *sqliteRepo }
 
-const courseCols = `id, name, subject, teacher_id, total_lessons, price_cents, minutes, active`
+const courseCols = `id, code, name, subject, teacher_id, total_lessons, price_cents, minutes, active`
 
 func (s courseStore) List(ctx context.Context, q domain.Query) ([]domain.Course, error) {
 	sql := `SELECT ` + courseCols + ` FROM courses`
 	var args []any
 	if q.Search != "" {
-		sql += ` WHERE name LIKE ?1 OR subject LIKE ?1`
+		sql += ` WHERE name LIKE ?1 OR subject LIKE ?1 OR code LIKE ?1`
 		args = append(args, "%"+q.Search+"%")
 	}
-	sql += ` ORDER BY name`
+	sql += ` ORDER BY id DESC`
+	if q.Limit > 0 {
+		sql += ` LIMIT ` + strconv.Itoa(q.Limit)
+	}
 	rows, err := s.r.db.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
@@ -478,8 +560,16 @@ func (s courseStore) List(ctx context.Context, q domain.Query) ([]domain.Course,
 	return out, nil
 }
 
-func (s courseStore) Get(ctx context.Context, id string) (domain.Course, error) {
-	rows, err := s.r.db.Query(ctx, `SELECT `+courseCols+` FROM courses WHERE id = ?`, id)
+func (s courseStore) Get(ctx context.Context, idOrCode string) (domain.Course, error) {
+	var (
+		rows sqlite.Rows
+		err  error
+	)
+	if num, e := strconv.ParseInt(idOrCode, 10, 64); e == nil && num > 0 {
+		rows, err = s.r.db.Query(ctx, `SELECT `+courseCols+` FROM courses WHERE id = ?1 OR code = ?2`, num, idOrCode)
+	} else {
+		rows, err = s.r.db.Query(ctx, `SELECT `+courseCols+` FROM courses WHERE code = ?1`, idOrCode)
+	}
 	if err != nil {
 		return domain.Course{}, err
 	}
@@ -490,30 +580,53 @@ func (s courseStore) Get(ctx context.Context, id string) (domain.Course, error) 
 }
 
 func (s courseStore) Save(ctx context.Context, v *domain.Course) error {
-	if v.ID == "" {
-		v.ID = domain.NewID("crs")
+	if strings.TrimSpace(v.Name) == "" {
+		return errors.New("课程名称不能为空")
 	}
+	if v.Code == "" {
+		v.Code = domain.NewID("crs")
+	}
+
+	if v.ID == 0 {
+		res, err := s.r.db.Execute(ctx, `
+			INSERT INTO courses (code, name, subject, teacher_id, total_lessons, price_cents, minutes, active)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			v.Code, v.Name, v.Subject, v.TeacherID, v.TotalLessons, v.PriceCents, v.Minutes, b2i(v.Active))
+		if err != nil {
+			return err
+		}
+		v.ID = res.LastInsertID
+		return nil
+	}
+
 	_, err := s.r.db.Execute(ctx, `
-		INSERT INTO courses (id, name, subject, teacher_id, total_lessons, price_cents, minutes, active)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			name = excluded.name, subject = excluded.subject, teacher_id = excluded.teacher_id,
-			total_lessons = excluded.total_lessons, price_cents = excluded.price_cents,
-			minutes = excluded.minutes, active = excluded.active`,
-		v.ID, v.Name, v.Subject, v.TeacherID, v.TotalLessons, v.PriceCents, v.Minutes, b2i(v.Active))
+		UPDATE courses SET
+			name = ?, subject = ?, teacher_id = ?, total_lessons = ?, price_cents = ?, minutes = ?, active = ?
+		WHERE id = ?`,
+		v.Name, v.Subject, v.TeacherID, v.TotalLessons, v.PriceCents, v.Minutes, b2i(v.Active), v.ID)
 	return err
 }
 
-func (s courseStore) Delete(ctx context.Context, id string) error {
-	_, err := s.r.db.Execute(ctx, `DELETE FROM courses WHERE id = ?`, id)
+func (s courseStore) Delete(ctx context.Context, idOrCode string) error {
+	if num, e := strconv.ParseInt(idOrCode, 10, 64); e == nil && num > 0 {
+		_, err := s.r.db.Execute(ctx, `DELETE FROM courses WHERE id = ?1 OR code = ?2`, num, idOrCode)
+		return err
+	}
+	_, err := s.r.db.Execute(ctx, `DELETE FROM courses WHERE code = ?1`, idOrCode)
 	return err
 }
 
 func scanCourse(v []any) domain.Course {
 	return domain.Course{
-		ID: colString(at(v, 0)), Name: colString(at(v, 1)), Subject: colString(at(v, 2)),
-		TeacherID: colString(at(v, 3)), TotalLessons: int(colInt(at(v, 4))),
-		PriceCents: colInt(at(v, 5)), Minutes: int(colInt(at(v, 6))), Active: colBool(at(v, 7)),
+		ID:           colInt(at(v, 0)),
+		Code:         colString(at(v, 1)),
+		Name:         colString(at(v, 2)),
+		Subject:      colString(at(v, 3)),
+		TeacherID:    colInt(at(v, 4)),
+		TotalLessons: int(colInt(at(v, 5))),
+		PriceCents:   colInt(at(v, 6)),
+		Minutes:      int(colInt(at(v, 7))),
+		Active:       colBool(at(v, 8)),
 	}
 }
 
@@ -521,13 +634,13 @@ func scanCourse(v []any) domain.Course {
 
 type lessonStore struct{ r *sqliteRepo }
 
-const lessonCols = `id, course_id, teacher_id, classroom_id, start_at, minutes, status`
+const lessonCols = `id, code, course_id, teacher_id, classroom_id, start_at, minutes, status`
 
 func (s lessonStore) List(ctx context.Context, q domain.Query) ([]domain.Lesson, error) {
 	sql := `SELECT ` + lessonCols + ` FROM lessons`
 	var args []any
 	if q.Search != "" {
-		sql += ` WHERE status LIKE ?1`
+		sql += ` WHERE status LIKE ?1 OR code LIKE ?1`
 		args = append(args, "%"+q.Search+"%")
 	}
 	sql += ` ORDER BY start_at DESC`
@@ -545,8 +658,16 @@ func (s lessonStore) List(ctx context.Context, q domain.Query) ([]domain.Lesson,
 	return out, nil
 }
 
-func (s lessonStore) Get(ctx context.Context, id string) (domain.Lesson, error) {
-	rows, err := s.r.db.Query(ctx, `SELECT `+lessonCols+` FROM lessons WHERE id = ?`, id)
+func (s lessonStore) Get(ctx context.Context, idOrCode string) (domain.Lesson, error) {
+	var (
+		rows sqlite.Rows
+		err  error
+	)
+	if num, e := strconv.ParseInt(idOrCode, 10, 64); e == nil && num > 0 {
+		rows, err = s.r.db.Query(ctx, `SELECT `+lessonCols+` FROM lessons WHERE id = ?1 OR code = ?2`, num, idOrCode)
+	} else {
+		rows, err = s.r.db.Query(ctx, `SELECT `+lessonCols+` FROM lessons WHERE code = ?1`, idOrCode)
+	}
 	if err != nil {
 		return domain.Lesson{}, err
 	}
@@ -557,33 +678,55 @@ func (s lessonStore) Get(ctx context.Context, id string) (domain.Lesson, error) 
 }
 
 func (s lessonStore) Save(ctx context.Context, v *domain.Lesson) error {
-	if v.ID == "" {
-		v.ID = domain.NewID("les")
+	if v.Code == "" {
+		v.Code = domain.NewID("les")
+	}
+	if v.StartAt.IsZero() {
+		v.StartAt = time.Now()
 	}
 	if v.Status == "" {
 		v.Status = "planned"
 	}
+
+	if v.ID == 0 {
+		res, err := s.r.db.Execute(ctx, `
+			INSERT INTO lessons (code, course_id, teacher_id, classroom_id, start_at, minutes, status)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			v.Code, v.CourseID, v.TeacherID, v.ClassroomID, v.StartAt.Format(time.RFC3339), v.Minutes, v.Status)
+		if err != nil {
+			return err
+		}
+		v.ID = res.LastInsertID
+		return nil
+	}
+
 	_, err := s.r.db.Execute(ctx, `
-		INSERT INTO lessons (id, course_id, teacher_id, classroom_id, start_at, minutes, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			course_id = excluded.course_id, teacher_id = excluded.teacher_id,
-			classroom_id = excluded.classroom_id, start_at = excluded.start_at,
-			minutes = excluded.minutes, status = excluded.status`,
-		v.ID, v.CourseID, v.TeacherID, v.ClassroomID, v.StartAt.Format(time.RFC3339), v.Minutes, v.Status)
+		UPDATE lessons SET
+			course_id = ?, teacher_id = ?, classroom_id = ?, start_at = ?, minutes = ?, status = ?
+		WHERE id = ?`,
+		v.CourseID, v.TeacherID, v.ClassroomID, v.StartAt.Format(time.RFC3339), v.Minutes, v.Status, v.ID)
 	return err
 }
 
-func (s lessonStore) Delete(ctx context.Context, id string) error {
-	_, err := s.r.db.Execute(ctx, `DELETE FROM lessons WHERE id = ?`, id)
+func (s lessonStore) Delete(ctx context.Context, idOrCode string) error {
+	if num, e := strconv.ParseInt(idOrCode, 10, 64); e == nil && num > 0 {
+		_, err := s.r.db.Execute(ctx, `DELETE FROM lessons WHERE id = ?1 OR code = ?2`, num, idOrCode)
+		return err
+	}
+	_, err := s.r.db.Execute(ctx, `DELETE FROM lessons WHERE code = ?1`, idOrCode)
 	return err
 }
 
 func scanLesson(v []any) domain.Lesson {
 	return domain.Lesson{
-		ID: colString(at(v, 0)), CourseID: colString(at(v, 1)), TeacherID: colString(at(v, 2)),
-		ClassroomID: colString(at(v, 3)), StartAt: colTime(at(v, 4)),
-		Minutes: int(colInt(at(v, 5))), Status: colString(at(v, 6)),
+		ID:          colInt(at(v, 0)),
+		Code:        colString(at(v, 1)),
+		CourseID:    colInt(at(v, 2)),
+		TeacherID:   colInt(at(v, 3)),
+		ClassroomID: colInt(at(v, 4)),
+		StartAt:     colTime(at(v, 5)),
+		Minutes:     int(colInt(at(v, 6))),
+		Status:      colString(at(v, 7)),
 	}
 }
 
@@ -591,14 +734,45 @@ func scanLesson(v []any) domain.Lesson {
 
 type ledgerStore struct{ r *sqliteRepo }
 
-func (l ledgerStore) List(ctx context.Context, studentID string, limit int) ([]domain.LedgerEntry, error) {
-	sql := `SELECT id, student_id, kind, amount_cents, balance_cents, note, at FROM ledger`
-	var args []any
-	if studentID != "" {
-		sql += ` WHERE student_id = ?1`
-		args = append(args, studentID)
+const ledgerCols = `id, code, student_id, kind, amount_cents, balance_cents, note, at`
+
+func (l ledgerStore) resolveStudentID(ctx context.Context, studentID any) (int64, error) {
+	switch v := studentID.(type) {
+	case int64:
+		if v > 0 {
+			return v, nil
+		}
+	case int:
+		if v > 0 {
+			return int64(v), nil
+		}
+	case string:
+		if num, err := strconv.ParseInt(v, 10, 64); err == nil && num > 0 {
+			return num, nil
+		}
+		rows, err := l.r.db.Query(ctx, "SELECT id FROM students WHERE code = ?", v)
+		if err != nil {
+			return 0, err
+		}
+		if len(rows.Values) == 0 {
+			return 0, domain.ErrNotFound
+		}
+		return colInt(rows.Values[0][0]), nil
 	}
-	sql += ` ORDER BY at DESC, id DESC`
+	return 0, domain.ErrNotFound
+}
+
+func (l ledgerStore) List(ctx context.Context, studentID any, limit int) ([]domain.LedgerEntry, error) {
+	sql := `SELECT ` + ledgerCols + ` FROM ledger`
+	var args []any
+	if studentID != nil && studentID != "" && studentID != int64(0) {
+		stuID, err := l.resolveStudentID(ctx, studentID)
+		if err == nil {
+			sql += ` WHERE student_id = ?`
+			args = append(args, stuID)
+		}
+	}
+	sql += ` ORDER BY at DESC`
 	if limit > 0 {
 		sql += ` LIMIT ` + strconv.Itoa(limit)
 	}
@@ -608,208 +782,253 @@ func (l ledgerStore) List(ctx context.Context, studentID string, limit int) ([]d
 	}
 	out := make([]domain.LedgerEntry, 0, len(rows.Values))
 	for _, v := range rows.Values {
-		out = append(out, domain.LedgerEntry{
-			ID: colString(at(v, 0)), StudentID: colString(at(v, 1)), Kind: colString(at(v, 2)),
-			Amount: colInt(at(v, 3)), Balance: colInt(at(v, 4)), Note: colString(at(v, 5)),
-			At: colTime(at(v, 6)),
-		})
+		out = append(out, scanLedger(v))
 	}
 	return out, nil
 }
 
-func (l ledgerStore) TopUp(ctx context.Context, studentID string, amountCents int64, note string) (domain.LedgerEntry, error) {
+func (l ledgerStore) TopUp(ctx context.Context, studentID any, amountCents int64, note string) (domain.LedgerEntry, error) {
 	if amountCents <= 0 {
 		return domain.LedgerEntry{}, errors.New("充值金额必须大于 0")
 	}
-	return l.move(ctx, studentID, amountCents, domain.KindTopUp, note)
+	return l.apply(ctx, studentID, domain.KindTopUp, amountCents, note)
 }
 
-func (l ledgerStore) Consume(ctx context.Context, studentID string, amountCents int64, note string) (domain.LedgerEntry, error) {
+func (l ledgerStore) Consume(ctx context.Context, studentID any, amountCents int64, note string) (domain.LedgerEntry, error) {
 	if amountCents <= 0 {
-		return domain.LedgerEntry{}, errors.New("消课金额必须大于 0")
+		return domain.LedgerEntry{}, errors.New("扣费金额必须大于 0")
 	}
-	return l.move(ctx, studentID, -amountCents, domain.KindConsume, note)
+	return l.apply(ctx, studentID, domain.KindConsume, -amountCents, note)
 }
 
-// move reads the balance, applies delta and appends the entry, one step at
-// a time under mu, so that two quick clicks cannot both read the old value.
-func (l ledgerStore) move(ctx context.Context, studentID string, delta int64, kind, note string) (domain.LedgerEntry, error) {
+func (l ledgerStore) apply(ctx context.Context, studentID any, kind string, delta int64, note string) (domain.LedgerEntry, error) {
 	l.r.mu.Lock()
 	defer l.r.mu.Unlock()
 
-	rows, err := l.r.db.Query(ctx, `SELECT balance_cents FROM students WHERE id = ?`, studentID)
+	stuID, err := l.resolveStudentID(ctx, studentID)
+	if err != nil {
+		return domain.LedgerEntry{}, fmt.Errorf("student %v: %w", studentID, domain.ErrNotFound)
+	}
+
+	rows, err := l.r.db.Query(ctx, `SELECT balance_cents FROM students WHERE id = ?`, stuID)
 	if err != nil {
 		return domain.LedgerEntry{}, err
 	}
 	if len(rows.Values) == 0 {
-		return domain.LedgerEntry{}, domain.ErrNotFound
+		return domain.LedgerEntry{}, fmt.Errorf("student %v: %w", studentID, domain.ErrNotFound)
 	}
-	next := colInt(rows.Values[0][0]) + delta
+	current := colInt(rows.Values[0][0])
+	next := current + delta
 	if next < 0 {
 		return domain.LedgerEntry{}, errors.New("余额不足，无法消课")
 	}
-	e := domain.LedgerEntry{
-		ID: domain.NewID("led"), StudentID: studentID, Kind: kind,
-		Amount: delta, Balance: next, Note: note, At: time.Now(),
-	}
-	if _, err := l.r.db.Execute(ctx, `UPDATE students SET balance_cents = ? WHERE id = ?`, next, studentID); err != nil {
+
+	if _, err := l.r.db.Execute(ctx, `UPDATE students SET balance_cents = ? WHERE id = ?`, next, stuID); err != nil {
 		return domain.LedgerEntry{}, err
 	}
-	if _, err := l.r.db.Execute(ctx,
-		`INSERT INTO ledger (id, student_id, kind, amount_cents, balance_cents, note, at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		e.ID, e.StudentID, e.Kind, e.Amount, e.Balance, e.Note, e.At.Format(time.RFC3339)); err != nil {
+	entry := domain.LedgerEntry{
+		Code:      domain.NewID("ldg"),
+		StudentID: stuID,
+		Kind:      kind,
+		Amount:    delta,
+		Balance:   next,
+		Note:      note,
+		At:        time.Now(),
+	}
+	res, err := l.r.db.Execute(ctx, `
+		INSERT INTO ledger (code, student_id, kind, amount_cents, balance_cents, note, at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		entry.Code, entry.StudentID, entry.Kind, entry.Amount, entry.Balance, entry.Note, entry.At.Format(time.RFC3339))
+	if err != nil {
 		return domain.LedgerEntry{}, err
 	}
-	return e, nil
+	entry.ID = res.LastInsertID
+	return entry, nil
 }
 
-// ─── users ──────────────────────────────────────────────────────────────
+func scanLedger(v []any) domain.LedgerEntry {
+	return domain.LedgerEntry{
+		ID:        colInt(at(v, 0)),
+		Code:      colString(at(v, 1)),
+		StudentID: colInt(at(v, 2)),
+		Kind:      colString(at(v, 3)),
+		Amount:    colInt(at(v, 4)),
+		Balance:   colInt(at(v, 5)),
+		Note:      colString(at(v, 6)),
+		At:        colTime(at(v, 7)),
+	}
+}
 
-// The account a fresh database starts with, so that the app opens on a
-// login it can pass. Change the password before shipping.
-const (
-	DefaultUsername = "admin"
-	DefaultPassword = "admin123"
-)
+// ─── auth & users ───────────────────────────────────────────────────────
 
-// pbkdf2Iterations is high enough to make a guess slow, low enough that a
-// login stays instant.
-const pbkdf2Iterations = 120_000
-
-type authStore struct{ r *sqliteRepo }
-
-// ensureAdmin adds the default account to a database that has none, and
-// leaves an existing one alone: a changed password survives a restart.
 func (r *sqliteRepo) ensureAdmin(ctx context.Context) error {
-	rows, err := r.db.Query(ctx, `SELECT COUNT(*) FROM users`)
+	rows, err := r.db.Query(ctx, `SELECT COUNT(*) FROM users WHERE username = 'admin'`)
 	if err != nil {
 		return err
 	}
-	if len(rows.Values) == 1 && colInt(rows.Values[0][0]) > 0 {
+	if len(rows.Values) > 0 && colInt(rows.Values[0][0]) > 0 {
 		return nil
 	}
-	salt, hash, err := hashPassword(DefaultPassword)
+	salt, hash, err := crypto.HashPassword("admin123")
 	if err != nil {
 		return err
 	}
+	admin := domain.User{
+		Code:        "usr_admin",
+		Username:    "admin",
+		DisplayName: "系统管理员",
+		Role:        string(domain.RoleAdmin),
+		CreatedAt:   time.Now(),
+	}
 	_, err = r.db.Execute(ctx, `
-		INSERT INTO users (id, username, display_name, role, salt, hash, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		domain.NewID("usr"), DefaultUsername, "管理员", "admin", salt, hash,
-		time.Now().Format(time.RFC3339))
+		INSERT INTO users (code, username, display_name, role, salt, hash, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(username) DO NOTHING`,
+		admin.Code, admin.Username, admin.DisplayName, admin.Role, salt, hash, admin.CreatedAt.Format(time.RFC3339))
 	return err
 }
 
+type authStore struct{ r *sqliteRepo }
+
 func (a authStore) Login(ctx context.Context, username, password string) (domain.User, error) {
-	rows, err := a.r.db.Query(ctx, `
-		SELECT id, username, display_name, role, salt, hash, created_at
-		FROM users WHERE username = ?`, strings.TrimSpace(username))
+	username = strings.TrimSpace(username)
+	rows, err := a.r.db.Query(ctx, `SELECT id, code, username, display_name, role, salt, hash, created_at FROM users WHERE username = ?`, username)
 	if err != nil {
 		return domain.User{}, err
 	}
 	if len(rows.Values) == 0 {
 		return domain.User{}, domain.ErrBadCredentials
 	}
-	v := rows.Values[0]
-	if !checkPassword(password, colString(at(v, 4)), colString(at(v, 5))) {
+	row := rows.Values[0]
+	salt := colString(at(row, 5))
+	hash := colString(at(row, 6))
+	if !crypto.CheckPassword(password, salt, hash) {
 		return domain.User{}, domain.ErrBadCredentials
 	}
 	return domain.User{
-		ID:          colString(at(v, 0)),
-		Username:    colString(at(v, 1)),
-		DisplayName: colString(at(v, 2)),
-		Role:        colString(at(v, 3)),
-		CreatedAt:   colTime(at(v, 6)),
+		ID:          colInt(at(row, 0)),
+		Code:        colString(at(row, 1)),
+		Username:    colString(at(row, 2)),
+		DisplayName: colString(at(row, 3)),
+		Role:        colString(at(row, 4)),
+		CreatedAt:   colTime(at(row, 7)),
 	}, nil
 }
 
-// hashPassword salts and stretches the password with PBKDF2-SHA256, from
-// the standard library: no dependency, and no plain text on disk.
-func hashPassword(password string) (saltHex, hashHex string, err error) {
-	salt := make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil {
-		return "", "", err
+func (a authStore) ResetPassword(ctx context.Context, username, recoveryKey, newPassword string) error {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return errors.New("请输入用户名")
 	}
-	sum, err := pbkdf2.Key(sha256.New, password, salt, pbkdf2Iterations, 32)
+	recoveryKey = strings.TrimSpace(recoveryKey)
+	if recoveryKey == "" {
+		return domain.ErrInvalidRecoveryKey
+	}
+	newPassword = strings.TrimSpace(newPassword)
+	if len(newPassword) < 6 {
+		return errors.New("新密码长度不能少于 6 位")
+	}
+	expectedKey := domain.DefaultRecoveryKey
+	savedKey, err := a.r.Settings().Get(ctx, domain.SettingsKeyRecoveryKey)
+	if err == nil && savedKey != "" {
+		expectedKey = savedKey
+	}
+	if recoveryKey != expectedKey {
+		return domain.ErrInvalidRecoveryKey
+	}
+
+	rows, err := a.r.db.Query(ctx, `SELECT id FROM users WHERE username = ?`, username)
 	if err != nil {
-		return "", "", err
+		return err
 	}
-	return hex.EncodeToString(salt), hex.EncodeToString(sum), nil
+	if len(rows.Values) == 0 {
+		return domain.ErrUserNotFound
+	}
+	userID := colInt(rows.Values[0][0])
+
+	salt, hash, err := crypto.HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	_, err = a.r.db.Execute(ctx, `UPDATE users SET salt = ?, hash = ? WHERE id = ?`, salt, hash, userID)
+	return err
 }
 
-// checkPassword derives the hash with the stored salt and compares in
-// constant time, so that a wrong password takes as long as a right one.
-func checkPassword(password, saltHex, hashHex string) bool {
-	salt, err := hex.DecodeString(saltHex)
-	if err != nil {
-		return false
+func (a authStore) Register(ctx context.Context, username, password, displayName string) (domain.User, error) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return domain.User{}, errors.New("用户名不能为空")
 	}
-	want, err := hex.DecodeString(hashHex)
-	if err != nil || len(want) == 0 {
-		return false
+	if len([]rune(password)) < 6 {
+		return domain.User{}, errors.New("密码至少 6 位")
 	}
-	got, err := pbkdf2.Key(sha256.New, password, salt, pbkdf2Iterations, len(want))
-	if err != nil {
-		return false
+	displayName = strings.TrimSpace(displayName)
+	if displayName == "" {
+		displayName = username
 	}
-	return subtle.ConstantTimeCompare(got, want) == 1
+	user := domain.User{
+		Username:    username,
+		DisplayName: displayName,
+		Role:        string(domain.RoleStaff),
+	}
+	if err := a.r.Users().Create(ctx, &user, password); err != nil {
+		return domain.User{}, err
+	}
+	return user, nil
 }
 
-// ─── accounts ───────────────────────────────────────────────────────────
-
-// userStore manages the accounts an admin hands out. It refuses the two
-// ways a database could end up with nobody able to administer it: dropping
-// the last admin, and demoting it.
 type userStore struct{ r *sqliteRepo }
 
+const userCols = `id, code, username, display_name, role, created_at`
+
 func (u userStore) List(ctx context.Context) ([]domain.User, error) {
-	rows, err := u.r.db.Query(ctx, `
-		SELECT id, username, display_name, role, created_at FROM users ORDER BY created_at`)
+	rows, err := u.r.db.Query(ctx, `SELECT `+userCols+` FROM users ORDER BY id ASC`)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]domain.User, 0, len(rows.Values))
 	for _, v := range rows.Values {
 		out = append(out, domain.User{
-			ID:          colString(at(v, 0)),
-			Username:    colString(at(v, 1)),
-			DisplayName: colString(at(v, 2)),
-			Role:        colString(at(v, 3)),
-			CreatedAt:   colTime(at(v, 4)),
+			ID:          colInt(at(v, 0)),
+			Code:        colString(at(v, 1)),
+			Username:    colString(at(v, 2)),
+			DisplayName: colString(at(v, 3)),
+			Role:        colString(at(v, 4)),
+			CreatedAt:   colTime(at(v, 5)),
 		})
 	}
 	return out, nil
 }
 
 func (u userStore) Create(ctx context.Context, v *domain.User, password string) error {
-	v.Username = strings.TrimSpace(v.Username)
-	if v.Username == "" {
+	if strings.TrimSpace(v.Username) == "" {
 		return errors.New("用户名不能为空")
 	}
 	if len([]rune(password)) < 6 {
 		return errors.New("密码至少 6 位")
 	}
-	if v.Role == "" {
-		v.Role = string(domain.RoleStaff)
-	}
-	salt, hash, err := hashPassword(password)
+	salt, hash, err := crypto.HashPassword(password)
 	if err != nil {
 		return err
 	}
-	if v.ID == "" {
-		v.ID = domain.NewID("usr")
+	if v.Code == "" {
+		v.Code = domain.NewID("usr")
 	}
 	if v.CreatedAt.IsZero() {
 		v.CreatedAt = time.Now()
 	}
-	_, err = u.r.db.Execute(ctx, `
-		INSERT INTO users (id, username, display_name, role, salt, hash, created_at)
+	res, err := u.r.db.Execute(ctx, `
+		INSERT INTO users (code, username, display_name, role, salt, hash, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		v.ID, v.Username, v.DisplayName, v.Role, salt, hash, v.CreatedAt.Format(time.RFC3339))
-	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
-		return errors.New("用户名已存在")
+		v.Code, v.Username, v.DisplayName, v.Role, salt, hash, v.CreatedAt.Format(time.RFC3339))
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "unique") {
+			return errors.New("用户名已存在")
+		}
+		return err
 	}
-	return err
+	v.ID = res.LastInsertID
+	return nil
 }
 
 func (u userStore) Update(ctx context.Context, v domain.User) error {
@@ -824,41 +1043,73 @@ func (u userStore) Update(ctx context.Context, v domain.User) error {
 	return err
 }
 
-func (u userStore) SetPassword(ctx context.Context, id, password string) error {
+func (u userStore) resolveUserID(ctx context.Context, id any) (int64, error) {
+	switch v := id.(type) {
+	case int64:
+		if v > 0 {
+			return v, nil
+		}
+	case int:
+		if v > 0 {
+			return int64(v), nil
+		}
+	case string:
+		if num, err := strconv.ParseInt(v, 10, 64); err == nil && num > 0 {
+			return num, nil
+		}
+		rows, err := u.r.db.Query(ctx, "SELECT id FROM users WHERE code = ? OR username = ?", v, v)
+		if err != nil {
+			return 0, err
+		}
+		if len(rows.Values) == 0 {
+			return 0, domain.ErrNotFound
+		}
+		return colInt(rows.Values[0][0]), nil
+	}
+	return 0, domain.ErrNotFound
+}
+
+func (u userStore) SetPassword(ctx context.Context, id any, password string) error {
 	if len([]rune(password)) < 6 {
 		return errors.New("密码至少 6 位")
 	}
-	salt, hash, err := hashPassword(password)
+	userID, err := u.resolveUserID(ctx, id)
 	if err != nil {
 		return err
 	}
-	_, err = u.r.db.Execute(ctx, `UPDATE users SET salt = ?, hash = ? WHERE id = ?`, salt, hash, id)
-	return err
-}
-
-func (u userStore) Delete(ctx context.Context, id string) error {
-	if err := u.keepOneAdmin(ctx, id); err != nil {
+	salt, hash, err := crypto.HashPassword(password)
+	if err != nil {
 		return err
 	}
-	_, err := u.r.db.Execute(ctx, `DELETE FROM users WHERE id = ?`, id)
+	_, err = u.r.db.Execute(ctx, `UPDATE users SET salt = ?, hash = ? WHERE id = ?`, salt, hash, userID)
 	return err
 }
 
-// keepOneAdmin refuses to leave the database without an admin: it asks
-// whether id is the last one.
-func (u userStore) keepOneAdmin(ctx context.Context, id string) error {
+func (u userStore) Delete(ctx context.Context, id any) error {
+	userID, err := u.resolveUserID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := u.keepOneAdmin(ctx, userID); err != nil {
+		return err
+	}
+	_, err = u.r.db.Execute(ctx, `DELETE FROM users WHERE id = ?`, userID)
+	return err
+}
+
+func (u userStore) keepOneAdmin(ctx context.Context, id int64) error {
 	rows, err := u.r.db.Query(ctx, `SELECT COUNT(*) FROM users WHERE role = 'admin' AND id <> ?`, id)
 	if err != nil {
 		return err
 	}
-	if colInt(at(rows.Values[0], 0)) > 0 {
+	if len(rows.Values) > 0 && colInt(rows.Values[0][0]) > 0 {
 		return nil
 	}
-	cur, err := u.r.db.Query(ctx, `SELECT role FROM users WHERE id = ?`, id)
+	rows, err = u.r.db.Query(ctx, `SELECT role FROM users WHERE id = ?`, id)
 	if err != nil {
 		return err
 	}
-	if len(cur.Values) == 1 && colString(at(cur.Values[0], 0)) == string(domain.RoleAdmin) {
+	if len(rows.Values) > 0 && colString(rows.Values[0][0]) == string(domain.RoleAdmin) {
 		return errors.New("至少要保留一个管理员")
 	}
 	return nil
@@ -866,8 +1117,6 @@ func (u userStore) keepOneAdmin(ctx context.Context, id string) error {
 
 // ─── settings ───────────────────────────────────────────────────────────
 
-// settingsStore keeps the app's preferences as key/value pairs: the same
-// file as the data, so a backup carries both.
 type settingsStore struct{ r *sqliteRepo }
 
 func (s settingsStore) Get(ctx context.Context, key string) (string, error) {
@@ -878,7 +1127,7 @@ func (s settingsStore) Get(ctx context.Context, key string) (string, error) {
 	if len(rows.Values) == 0 {
 		return "", nil
 	}
-	return colString(at(rows.Values[0], 0)), nil
+	return colString(rows.Values[0][0]), nil
 }
 
 func (s settingsStore) Set(ctx context.Context, key, value string) error {

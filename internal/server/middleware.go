@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"net/http"
 	"strings"
 
@@ -11,9 +13,45 @@ import (
 )
 
 const (
-	userKey = "server_user"
-	langKey = "server_lang"
+	userKey      = "server_user"
+	langKey      = "server_lang"
+	requestIDKey = "request_id"
 )
+
+// RequestIDFromContext returns the unique request ID from Gin context.
+func RequestIDFromContext(c *gin.Context) string {
+	if val, exists := c.Get(requestIDKey); exists {
+		if s, ok := val.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+// RequestIDMiddleware injects or propagates X-Request-ID for distributed tracing and audit logs.
+func RequestIDMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		reqID := c.GetHeader("X-Request-ID")
+		if reqID == "" {
+			var b [12]byte
+			_, _ = rand.Read(b[:])
+			reqID = "req_" + hex.EncodeToString(b[:])
+		}
+		c.Set(requestIDKey, reqID)
+		c.Writer.Header().Set("X-Request-ID", reqID)
+		c.Next()
+	}
+}
+
+// MaxBodyBytesMiddleware limits request body size (e.g. 10MB) to protect against memory exhaustion.
+func MaxBodyBytesMiddleware(limit int64) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.Request.Body != nil {
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
+		}
+		c.Next()
+	}
+}
 
 // UserFromContext retrieves the authenticated user from the Gin context.
 func UserFromContext(c *gin.Context) (domain.User, bool) {
@@ -109,10 +147,14 @@ func RequirePermission(perm domain.Permission, write bool) gin.HandlerFunc {
 	}
 }
 
-// writeJSONError writes a standardized error JSON response.
+// writeJSONError writes a standardized error JSON response with request tracking ID.
 func writeJSONError(c *gin.Context, status int, message string) {
-	c.JSON(status, gin.H{
+	resp := gin.H{
 		"error":   message,
 		"message": message,
-	})
+	}
+	if reqID := RequestIDFromContext(c); reqID != "" {
+		resp["request_id"] = reqID
+	}
+	c.JSON(status, resp)
 }

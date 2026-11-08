@@ -4,7 +4,8 @@ import "time"
 
 // Student represents a student with prepaid tuition balance.
 type Student struct {
-	ID        string    `json:"id"`
+	ID        int64     `json:"id"`
+	Code      string    `json:"code"`
 	Name      string    `json:"name"`
 	Guardian  string    `json:"guardian"`
 	Phone     string    `json:"phone"`

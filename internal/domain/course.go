@@ -4,7 +4,8 @@ import "time"
 
 // Classroom represents a physical or virtual room where lessons take place.
 type Classroom struct {
-	ID       string `json:"id"`
+	ID       int64  `json:"id"`
+	Code     string `json:"code"`
 	Name     string `json:"name"`
 	Capacity int    `json:"capacity"`
 	Location string `json:"location"`
@@ -13,10 +14,11 @@ type Classroom struct {
 
 // Course represents a package of lessons sold at a specified price.
 type Course struct {
-	ID           string `json:"id"`
+	ID           int64  `json:"id"`
+	Code         string `json:"code"`
 	Name         string `json:"name"`
 	Subject      string `json:"subject"`
-	TeacherID    string `json:"teacherId"`
+	TeacherID    int64  `json:"teacherId"`
 	TotalLessons int    `json:"totalLessons"`
 	PriceCents   int64  `json:"priceCents"`
 	Minutes      int    `json:"minutes"`
@@ -25,10 +27,11 @@ type Course struct {
 
 // Lesson represents a single scheduled or conducted lesson session.
 type Lesson struct {
-	ID          string    `json:"id"`
-	CourseID    string    `json:"courseId"`
-	TeacherID   string    `json:"teacherId"`
-	ClassroomID string    `json:"classroomId"`
+	ID          int64     `json:"id"`
+	Code        string    `json:"code"`
+	CourseID    int64     `json:"courseId"`
+	TeacherID   int64     `json:"teacherId"`
+	ClassroomID int64     `json:"classroomId"`
 	StartAt     time.Time `json:"startAt"`
 	Minutes     int       `json:"minutes"`
 	Status      string    `json:"status"` // planned | done | canceled

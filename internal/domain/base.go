@@ -14,6 +14,18 @@ var ErrNotFound = errors.New("not found")
 // ErrBadCredentials is what Login returns for an unknown user or a wrong password.
 var ErrBadCredentials = errors.New("用户名或密码不正确")
 
+// ErrInvalidRecoveryKey is what ResetPassword returns when the recovery key is wrong.
+var ErrInvalidRecoveryKey = errors.New("安全恢复密钥不正确")
+
+// ErrUserNotFound is returned when the specified username does not exist.
+var ErrUserNotFound = errors.New("账号不存在")
+
+// DefaultRecoveryKey is the default fallback security recovery key.
+const DefaultRecoveryKey = "qm-recovery-2026"
+
+// SettingsKeyRecoveryKey is the key in settings table storing custom security recovery key.
+const SettingsKeyRecoveryKey = "security_recovery_key"
+
 // Query narrows a list: Search matches name or phone, Limit 0 means no limit.
 type Query struct {
 	Search string

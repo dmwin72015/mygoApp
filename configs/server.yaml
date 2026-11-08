@@ -2,7 +2,7 @@
 
 server:
   host: "0.0.0.0"
-  port: 8080
+  port: 8099
   # 运行模式: debug (开发调试模式) | release (生产高性能模式)
   mode: "release"
   read_timeout: "15s"
@@ -10,11 +10,12 @@ server:
   idle_timeout: "60s"
 
 database:
-  # 数据库驱动: postgres (生产推荐) | sqlite (轻量/本地模式)
+  # 数据库驱动: postgres (生产推荐) | mysql (主流关系库) | sqlite (轻量/本地模式)
   driver: "postgres"
   # PostgreSQL 连接串格式: postgres://username:password@host:port/dbname?sslmode=disable
-  # 若使用 SQLite，则配置为文件路径，例如: "school.db"
-  dsn: "postgres://postgres:password@127.0.0.1:5432/school?sslmode=disable"
+  # MySQL 连接串格式: username:password@tcp(host:port)/dbname?charset=utf8mb4&parseTime=true
+  # SQLite 连接串格式: 文件路径，例如: "school.db"
+  dsn: "postgres://postgres:root1234@127.0.0.1:15432/school?sslmode=disable"
   max_open_conns: 25
   max_idle_conns: 10
   conn_max_lifetime: "5m"

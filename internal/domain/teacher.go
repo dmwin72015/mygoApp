@@ -4,7 +4,8 @@ import "time"
 
 // Teacher represents an instructor who delivers lessons.
 type Teacher struct {
-	ID        string    `json:"id"`
+	ID        int64     `json:"id"`
+	Code      string    `json:"code"`
 	Name      string    `json:"name"`
 	Phone     string    `json:"phone"`
 	Subject   string    `json:"subject"`

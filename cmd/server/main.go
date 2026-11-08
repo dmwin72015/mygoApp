@@ -13,21 +13,21 @@ import (
 	"time"
 
 	"mygo-app/internal/config"
+	"mygo-app/internal/data/mysql"
 	"mygo-app/internal/data/postgres"
 	"mygo-app/internal/domain"
 	"mygo-app/internal/server"
 
+	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func main() {
 	var (
-		configFlag  = flag.String("config", "configs/server.yaml", "Path to YAML configuration file")
-		portFlag    = flag.Int("port", 0, "HTTP port to listen on (overrides config file)")
-		driverFlag  = flag.String("driver", "", "Database driver: 'postgres' or 'sqlite' (overrides config file)")
-		dsnFlag     = flag.String("dsn", "", "PostgreSQL connection string or SQLite file path (overrides config file)")
-		migrateFlag     = flag.String("migrate", "", "SQL migration action: 'up', 'down', 'redo', 'reset', 'status', 'version', or 'none' (overrides config file)")
-		migrateOnlyFlag = flag.Bool("migrate-only", false, "Execute migration action and exit immediately without starting HTTP server")
+		configFlag = flag.String("config", "configs/server.yaml", "Path to YAML configuration file")
+		portFlag   = flag.Int("port", 0, "HTTP port to listen on (overrides config file)")
+		driverFlag = flag.String("driver", "", "Database driver: 'postgres', 'mysql', or 'sqlite' (overrides config file)")
+		dsnFlag    = flag.String("dsn", "", "Database connection string or SQLite file path (overrides config file)")
 	)
 	flag.StringVar(configFlag, "c", "configs/server.yaml", "Short alias for -config")
 	flag.Parse()
@@ -48,28 +48,26 @@ func main() {
 	if *dsnFlag != "" {
 		cfg.Database.DSN = *dsnFlag
 	}
-	if *migrateFlag != "" {
-		cfg.Migrate.Action = strings.ToLower(strings.TrimSpace(*migrateFlag))
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// If user requested a dedicated migration task (status / down / redo / reset / version / migrate-only / up-only), execute and exit
-	if handleMigrationFlags(ctx, cfg, *migrateFlag, *migrateOnlyFlag) {
-		return
-	}
-
 	driver := cfg.Database.Driver
 	dsn := cfg.Database.DSN
 
-	log.Printf("Connecting to %s database at %s ...", driver, postgres.SanitizeDSN(dsn))
+	maskedDSN := postgres.SanitizeDSN(dsn)
+	if driver == "mysql" {
+		maskedDSN = mysql.SanitizeDSN(dsn)
+	}
+	log.Printf("Connecting to %s database at %s ...", driver, maskedDSN)
 	var repo domain.Repo
 	switch driver {
 	case "postgres", "postgresql", "pgx":
 		repo, err = postgres.Open(ctx, dsn)
+	case "mysql":
+		repo, err = mysql.Open(ctx, dsn)
 	default:
-		log.Fatalf("Unsupported server database driver: %s (server currently requires postgres)", driver)
+		log.Fatalf("Unsupported server database driver: %s (supported: postgres, mysql)", driver)
 	}
 
 	if err != nil {

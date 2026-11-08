@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"mygo-app/internal/domain"
@@ -64,7 +65,7 @@ func TestUserStore(t *testing.T) {
 	if err := users.Create(ctx, &staff, "secret123"); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if staff.ID == "" {
+	if staff.ID == 0 {
 		t.Error("create left the account without an ID")
 	}
 	if _, err := repo.Auth().Login(ctx, "teacher1", "secret123"); err != nil {
@@ -165,7 +166,7 @@ func TestSQLiteStore(t *testing.T) {
 	if err := repo.Students().Save(ctx, &v); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	got, err := repo.Students().Get(ctx, v.ID)
+	got, err := repo.Students().Get(ctx, strconv.FormatInt(v.ID, 10))
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -213,7 +214,7 @@ func TestSQLiteStore(t *testing.T) {
 	if len(rows) != len(students) {
 		t.Errorf("the reopened store has %d students, want %d", len(rows), len(students))
 	}
-	kept, err := again.Students().Get(ctx, v.ID)
+	kept, err := again.Students().Get(ctx, strconv.FormatInt(v.ID, 10))
 	if err != nil {
 		t.Fatalf("get after reopen: %v", err)
 	}
@@ -221,3 +222,66 @@ func TestSQLiteStore(t *testing.T) {
 		t.Errorf("reopen found %q with %d, want %q with %d", kept.Name, kept.Balance, "改名后的学生", use.Balance)
 	}
 }
+
+func TestResetPassword(t *testing.T) {
+	ctx := context.Background()
+	repo, err := Open(ctx, Config{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "reset.db")})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer repo.Close()
+
+	// 1. Wrong recovery key
+	err = repo.Auth().ResetPassword(ctx, DefaultUsername, "wrong-key", "newPassword123")
+	if !errors.Is(err, domain.ErrInvalidRecoveryKey) {
+		t.Fatalf("expected ErrInvalidRecoveryKey, got %v", err)
+	}
+
+	// 2. Non-existent user
+	err = repo.Auth().ResetPassword(ctx, "non_existent_user", domain.DefaultRecoveryKey, "newPassword123")
+	if !errors.Is(err, domain.ErrUserNotFound) {
+		t.Fatalf("expected ErrUserNotFound, got %v", err)
+	}
+
+	// 3. Short password
+	err = repo.Auth().ResetPassword(ctx, DefaultUsername, domain.DefaultRecoveryKey, "123")
+	if err == nil {
+		t.Fatalf("expected error for short password, got nil")
+	}
+
+	// 4. Successful reset with default recovery key
+	err = repo.Auth().ResetPassword(ctx, DefaultUsername, domain.DefaultRecoveryKey, "brandNewPass888")
+	if err != nil {
+		t.Fatalf("expected successful reset, got %v", err)
+	}
+
+	// Verify old password fails
+	if _, err := repo.Auth().Login(ctx, DefaultUsername, DefaultPassword); !errors.Is(err, domain.ErrBadCredentials) {
+		t.Fatalf("expected old password to fail with ErrBadCredentials, got %v", err)
+	}
+
+	// Verify new password succeeds
+	u, err := repo.Auth().Login(ctx, DefaultUsername, "brandNewPass888")
+	if err != nil {
+		t.Fatalf("expected login with new password to succeed, got %v", err)
+	}
+	if u.Username != DefaultUsername {
+		t.Fatalf("unexpected user: %+v", u)
+	}
+
+	// 5. Custom recovery key in settings
+	if err := repo.Settings().Set(ctx, domain.SettingsKeyRecoveryKey, "my-custom-key-999"); err != nil {
+		t.Fatalf("set custom recovery key: %v", err)
+	}
+	// Old default recovery key should now fail
+	err = repo.Auth().ResetPassword(ctx, DefaultUsername, domain.DefaultRecoveryKey, "anotherPass123")
+	if !errors.Is(err, domain.ErrInvalidRecoveryKey) {
+		t.Fatalf("expected ErrInvalidRecoveryKey after custom key set, got %v", err)
+	}
+	// Custom key succeeds
+	err = repo.Auth().ResetPassword(ctx, DefaultUsername, "my-custom-key-999", "anotherPass123")
+	if err != nil {
+		t.Fatalf("expected success with custom key, got %v", err)
+	}
+}
+

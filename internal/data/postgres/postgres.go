@@ -230,3 +230,5 @@ func SanitizeDSN(raw string) string {
 			return userInfo[:colonIdx] + ":xxxxx@" + raw[atIdx+1:]
 		}
 	}
+	return raw
+}

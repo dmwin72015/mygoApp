@@ -3,6 +3,7 @@ package features
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"mygo-app/internal/design"
@@ -92,11 +93,11 @@ func (t *Teachers) save() {
 	}()
 }
 
-func (t *Teachers) remove(id string) {
+func (t *Teachers) remove(id int64) {
 	t.busy = true
 	win, repo := t.win, t.repo
 	go func() {
-		err := repo.Teachers().Delete(context.Background(), id)
+		err := repo.Teachers().Delete(context.Background(), strconv.FormatInt(id, 10))
 		win.Update(func() {
 			t.busy = false
 			if err != nil {
@@ -230,7 +231,7 @@ func (t *Teachers) confirmDelete(c *ui.Context) {
 	if !design.Confirm(c, &t.askingDelete, "删除该老师？", "删除后将无法为该老师指派新课程，操作不可撤销。", "删除") {
 		return
 	}
-	if t.draft.ID != "" {
+	if t.draft.ID != 0 {
 		t.remove(t.draft.ID)
 	}
 }

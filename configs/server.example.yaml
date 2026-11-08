@@ -9,7 +9,9 @@ server:
   idle_timeout: "60s"
 
 database:
-  driver: "postgres" # postgres | sqlite
+  driver: "postgres" # postgres | mysql | sqlite
+  # PostgreSQL: postgres://postgres:password@127.0.0.1:5432/school?sslmode=disable
+  # MySQL: root:password@tcp(127.0.0.1:3306)/school?charset=utf8mb4&parseTime=true
   dsn: "postgres://postgres:password@127.0.0.1:5432/school?sslmode=disable"
   max_open_conns: 25
   max_idle_conns: 10

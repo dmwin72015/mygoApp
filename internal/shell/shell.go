@@ -4,9 +4,11 @@
 package shell
 
 import (
+	"runtime"
 	"time"
 
 	"mygo-app/internal/design"
+	"mygo-app/internal/design/tokens"
 	"mygo-app/internal/domain"
 	"mygo-app/internal/features"
 	"mygo-app/internal/i18n"
@@ -67,6 +69,11 @@ type Shell struct {
 	UserName string
 	// OnSignOut runs when the footer's button is pressed.
 	OnSignOut func()
+	// OnOpenSettings runs when the settings button is pressed.
+	OnOpenSettings func()
+
+	menuOpen      bool // controls bottom user dropdown menu
+	askingSignOut bool // controls sign-out confirmation dialog
 
 	dashboard  page
 	students   page
@@ -234,20 +241,123 @@ func (s *Shell) sidebar(c *ui.Context) {
 	}
 }
 
-// account is the signed-in user and the way out.
+// account is the signed-in user and the dropdown menu.
 func (s *Shell) account(c *ui.Context) {
 	t := design.Theme(c)
-	ui.Row(c).Padding(6, 4, 0).Gap(8).AlignItems(ui.Center).
+	tok := tokens.Get(c)
+
+	ui.Column(c).Padding(6, 0, 0).
 		BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
-		ui.Box(c).Size(26, 26).Radius(13).Background(t.SurfacePressed).Center().Children(func() {
-			ui.Text(c, initial(s.UserName)).FontSize(11).Bold().TextColor(t.Text)
+
+		// Trigger card: user identity + dropdown caret
+		trigger := ui.Row(c.Key("user-dropdown-trigger")).
+			Label("用户菜单").
+			Padding(6, 8).Radius(tokens.RadiusMd).Gap(8).AlignItems(ui.Center).
+			Cursor(ui.CursorPointer)
+
+		if trigger.Hovered() || s.menuOpen {
+			trigger.Background(t.SurfacePressed)
+		}
+
+		trigger.Children(func() {
+			// Avatar circle
+			ui.Box(c).Size(28, 28).Radius(14).Background(t.SurfacePressed).Center().Children(func() {
+				ui.Text(c, initial(s.UserName)).FontSize(12).Bold().TextColor(t.Text)
+			})
+			// Username + Role (full available width, never squeezed)
+			ui.Column(c).Grow(1).Gap(1).MinWidth(0).Children(func() {
+				ui.Text(c, s.UserName).FontSize(13).Bold().SingleLine()
+				ui.Text(c, s.role.Label()).FontSize(10).TextColor(t.TextMuted)
+			})
+			// Dropdown caret indicator
+			caret := "▾"
+			if s.menuOpen {
+				caret = "▴"
+			}
+			ui.Text(c, caret).FontSize(11).TextColor(t.TextMuted)
 		})
-		ui.Column(c).Grow(1).Gap(1).MinWidth(0).Children(func() {
-			ui.Text(c, s.UserName).FontSize(12).SingleLine()
-			ui.Text(c, s.role.Label()).FontSize(10).TextColor(t.TextMuted)
+
+		if trigger.Clicked() {
+			s.menuOpen = !s.menuOpen
+		}
+
+		// Dropdown menu popover
+		ui.Popover(c, trigger, &s.menuOpen, func() {
+			ui.Column(c).Width(204).Gap(2).Padding(4).Children(func() {
+				// 1. Profile summary header inside dropdown
+				ui.Row(c).Padding(8, 10).Gap(10).AlignItems(ui.Center).Children(func() {
+					ui.Box(c).Size(32, 32).Radius(16).Background(t.SurfacePressed).Center().Children(func() {
+						ui.Text(c, initial(s.UserName)).FontSize(13).Bold().TextColor(t.Text)
+					})
+					ui.Column(c).Grow(1).Gap(2).MinWidth(0).Children(func() {
+						ui.Text(c, s.UserName).FontSize(13).Bold().SingleLine()
+						ui.Text(c, s.role.Label()).FontSize(11).TextColor(t.TextMuted)
+					})
+				})
+
+				// Divider
+				ui.Row(c).Height(1).Background(t.Border).Margin(2, 0)
+
+				// 2. Settings action
+				if s.OnOpenSettings != nil {
+					settingsItem := ui.Row(c.Key("popover-settings")).
+						Label(i18n.T("settings.title")).
+						Padding(7, 10).Radius(tokens.RadiusSm).Gap(8).AlignItems(ui.Center).
+						Cursor(ui.CursorPointer)
+					if settingsItem.Hovered() {
+						settingsItem.Background(t.SurfacePressed)
+					}
+					settingsItem.Children(func() {
+						ui.Text(c, "⚙").FontSize(13)
+						ui.Text(c, i18n.T("settings.title")).FontSize(12)
+						ui.Spacer(c)
+						shortcut := "⌘,"
+						if runtime.GOOS != "darwin" {
+							shortcut = "Ctrl+,"
+						}
+						ui.Text(c, shortcut).FontSize(11).TextColor(t.TextMuted)
+					})
+					if settingsItem.Clicked() {
+						s.menuOpen = false
+						s.OnOpenSettings()
+					}
+				}
+
+				// Divider
+				ui.Row(c).Height(1).Background(t.Border).Margin(2, 0)
+
+				// 3. Sign out action
+				if s.OnSignOut != nil {
+					signOutItem := ui.Row(c.Key("popover-signout")).
+						Label(i18n.T("btn.signout")).
+						Padding(7, 10).Radius(tokens.RadiusSm).Gap(8).AlignItems(ui.Center).
+						Cursor(ui.CursorPointer)
+					if signOutItem.Hovered() {
+						signOutItem.Background(tok.Danger.Alpha(0.12))
+					}
+					signOutItem.Children(func() {
+						ui.Text(c, "🚪").FontSize(13)
+						lbl := ui.Text(c, i18n.T("btn.signout")).FontSize(12)
+						if signOutItem.Hovered() {
+							lbl.TextColor(tok.Danger)
+						}
+					})
+					if signOutItem.Clicked() {
+						s.menuOpen = false
+						s.askingSignOut = true
+					}
+				}
+			})
 		})
-		if ui.Button(c, i18n.T("btn.signout")).Clicked() && s.OnSignOut != nil {
-			s.OnSignOut()
+
+		if ui.AlertDialog(c, &s.askingSignOut,
+			i18n.T("auth.signout_title"),
+			i18n.T("auth.signout_desc"),
+			i18n.T("btn.cancel"),
+			i18n.T("btn.signout")) == 1 {
+			if s.OnSignOut != nil {
+				s.OnSignOut()
+			}
 		}
 	})
 }

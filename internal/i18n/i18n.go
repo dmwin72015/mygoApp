@@ -144,7 +144,7 @@ var translations = map[string]map[string]string{
 		"role.staff":             "教务运营",
 
 		// Settings page
-		"settings.title":         "系统设置",
+		"settings.title":         "设置",
 		"settings.subtitle":      "语言、主题与运行环境",
 		"settings.lang_card":     "语言设置 (Language)",
 		"settings.lang_desc":     "选择应用界面的显示语言，即时生效并自动保存。",
@@ -186,7 +186,27 @@ var translations = map[string]map[string]string{
 		"err.name_required":      "姓名不能为空",
 		"err.time_required":      "上课时间不能为空",
 		"err.amount_positive":    "金额必须大于 0",
+		"err.no_perm_other_user": "无权修改其他账号",
+		"err.cannot_delete_self": "不能删除当前登录账号",
 		"msg.login_success":      "登录成功",
+		"msg.pwd_reset_success":  "密码重置成功，请使用新密码登录",
+
+		// Registration & Auth UI
+		"auth.login_title":       "登录管理后台",
+		"auth.signup_title":      "创建新账号",
+		"auth.signup_sub":        "注册教务或教师账号，即时使用",
+		"auth.display_name":      "姓名 / 显示名",
+		"auth.display_name_ph":   "例如：张老师（选填）",
+		"auth.signup_btn":        "立即注册",
+		"auth.signing_up":        "正在注册…",
+		"auth.no_account":        "还没有账号？立即注册",
+		"auth.have_account":      "已有账号？返回登录",
+		"auth.confirm_pwd":       "确认密码",
+		"auth.confirm_pwd_ph":    "再次输入密码",
+		"auth.pwd_mismatch":      "两次输入的密码不一致",
+		"msg.register_success":   "注册成功并已自动登录",
+		"auth.signout_title":     "退出登录确认",
+		"auth.signout_desc":      "确定要退出当前登录账号吗？退出后需重新输入密码登录。",
 	},
 
 	LangEN: {
@@ -270,6 +290,26 @@ var translations = map[string]map[string]string{
 		"err.name_required":      "Name is required",
 		"err.time_required":      "Lesson start time is required",
 		"err.amount_positive":    "Amount must be greater than zero",
+		"err.no_perm_other_user": "Permission denied to modify other accounts",
+		"err.cannot_delete_self": "Cannot delete currently signed-in account",
 		"msg.login_success":      "Login successful",
+		"msg.pwd_reset_success":  "Password reset successfully, please sign in with new password",
+
+		// Registration & Auth UI
+		"auth.login_title":       "Sign In to Admin",
+		"auth.signup_title":      "Create an Account",
+		"auth.signup_sub":        "Register a staff or teacher account",
+		"auth.display_name":      "Display Name",
+		"auth.display_name_ph":   "e.g. Alex Zhang (optional)",
+		"auth.signup_btn":        "Register Now",
+		"auth.signing_up":        "Registering…",
+		"auth.no_account":        "Don't have an account? Sign Up",
+		"auth.have_account":      "Already have an account? Sign In",
+		"auth.confirm_pwd":       "Confirm Password",
+		"auth.confirm_pwd_ph":    "Re-enter password",
+		"auth.pwd_mismatch":      "Passwords do not match",
+		"msg.register_success":   "Registration successful and signed in",
+		"auth.signout_title":     "Sign Out Confirmation",
+		"auth.signout_desc":      "Are you sure you want to sign out? You will need to log in again.",
 	},
 }
