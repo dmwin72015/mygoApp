@@ -13,14 +13,14 @@ const (
 
 // LedgerEntry records a balance mutation (top-up or lesson consumption).
 type LedgerEntry struct {
-	ID        int64     `json:"id"`
-	Code      string    `json:"code"`
-	StudentID int64     `json:"studentId"`
-	Kind      string    `json:"kind"`
-	Amount    int64     `json:"amount"` // cents, positive for top-up, negative for consumption
-	Balance   int64     `json:"balance"`
-	Note      string    `json:"note"`
-	At        time.Time `json:"at"`
+	ID        int64     `json:"id" db:"id"`
+	Code      string    `json:"code" db:"code"`
+	StudentID int64     `json:"studentId" db:"student_id"`
+	Kind      string    `json:"kind" db:"kind"`
+	Amount    int64     `json:"amount" db:"amount_cents"` // cents, positive for top-up, negative for consumption
+	Balance   int64     `json:"balance" db:"balance_cents"`
+	Note      string    `json:"note" db:"note"`
+	At        time.Time `json:"at" db:"at"`
 }
 
 // Ledger provides append-only accounting operations.

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"strconv"
-	"time"
 
 	"mygo-app/internal/domain"
 )
@@ -30,21 +29,12 @@ func (s *LessonStore) List(ctx context.Context, q domain.Query) ([]domain.Lesson
 	qb.Limit(q.Limit)
 
 	query, args := qb.Build()
-	rows, err := s.dbtx(ctx).QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
 	var list []domain.Lesson
-	for rows.Next() {
-		var item domain.Lesson
-		if err := rows.Scan(&item.ID, &item.Code, &item.CourseID, &item.TeacherID, &item.ClassroomID, &item.StartAt, &item.Minutes, &item.Status); err != nil {
-			return nil, err
-		}
-		list = append(list, item)
+	err := s.dbtx(ctx).SelectContext(ctx, &list, query, args...)
+	if list == nil {
+		list = []domain.Lesson{}
 	}
-	return list, rows.Err()
+	return list, err
 }
 
 func (s *LessonStore) Get(ctx context.Context, idOrCode string) (domain.Lesson, error) {
@@ -61,9 +51,7 @@ func (s *LessonStore) Get(ctx context.Context, idOrCode string) (domain.Lesson, 
 		args = []any{idOrCode}
 	}
 
-	err := s.dbtx(ctx).QueryRowContext(ctx, query, args...).Scan(
-		&item.ID, &item.Code, &item.CourseID, &item.TeacherID, &item.ClassroomID, &item.StartAt, &item.Minutes, &item.Status,
-	)
+	err := s.dbtx(ctx).GetContext(ctx, &item, query, args...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Lesson{}, domain.ErrNotFound
 	}
@@ -71,23 +59,32 @@ func (s *LessonStore) Get(ctx context.Context, idOrCode string) (domain.Lesson, 
 }
 
 func (s *LessonStore) Save(ctx context.Context, v *domain.Lesson) error {
-	if v.Code == "" {
-		v.Code = domain.NewID("les")
+	if v.CourseID == 0 {
+		return errors.New("课程不能为空")
+	}
+	if v.TeacherID == 0 {
+		return errors.New("教师不能为空")
 	}
 	if v.StartAt.IsZero() {
-		v.StartAt = time.Now()
+		return errors.New("开始时间不能为空")
+	}
+	if v.Minutes <= 0 {
+		v.Minutes = 60
 	}
 	if v.Status == "" {
 		v.Status = "planned"
 	}
+	if v.Code == "" {
+		v.Code = domain.NewID("les")
+	}
 
 	if v.ID == 0 {
-		return s.dbtx(ctx).QueryRowContext(ctx,
+		return s.dbtx(ctx).GetContext(ctx, &v.ID,
 			`INSERT INTO lessons (code, course_id, teacher_id, classroom_id, start_at, minutes, status)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7)
 			 RETURNING id`,
 			v.Code, v.CourseID, v.TeacherID, v.ClassroomID, v.StartAt, v.Minutes, v.Status,
-		).Scan(&v.ID)
+		)
 	}
 
 	res, err := s.dbtx(ctx).ExecContext(ctx,

@@ -50,21 +50,12 @@ func (l *LedgerStore) List(ctx context.Context, studentID any, limit int) ([]dom
 	qb.Limit(limit)
 
 	query, args := qb.Build()
-	rows, err := l.dbtx(ctx).QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
 	var list []domain.LedgerEntry
-	for rows.Next() {
-		var item domain.LedgerEntry
-		if err := rows.Scan(&item.ID, &item.Code, &item.StudentID, &item.Kind, &item.Amount, &item.Balance, &item.Note, &item.At); err != nil {
-			return nil, err
-		}
-		list = append(list, item)
+	err := l.dbtx(ctx).SelectContext(ctx, &list, query, args...)
+	if list == nil {
+		list = []domain.LedgerEntry{}
 	}
-	return list, rows.Err()
+	return list, err
 }
 
 func (l *LedgerStore) TopUp(ctx context.Context, studentID any, amountCents int64, note string) (domain.LedgerEntry, error) {
@@ -110,12 +101,12 @@ func (l *LedgerStore) apply(ctx context.Context, studentID any, kind string, del
 			At:        time.Now(),
 		}
 
-		return l.dbtx(txCtx).QueryRowContext(txCtx,
+		return l.dbtx(txCtx).GetContext(txCtx, &entry.ID,
 			`INSERT INTO ledger (code, student_id, kind, amount_cents, balance_cents, note, at)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7)
 			 RETURNING id`,
 			entry.Code, entry.StudentID, entry.Kind, entry.Amount, entry.Balance, entry.Note, entry.At,
-		).Scan(&entry.ID)
+		)
 	})
 
 	if err != nil {

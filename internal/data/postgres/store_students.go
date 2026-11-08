@@ -41,7 +41,7 @@ func (s *StudentStore) ResolveID(ctx context.Context, studentID any) (int64, err
 			return num, nil
 		}
 		var realID int64
-		err := s.dbtx(ctx).QueryRowContext(ctx, "SELECT id FROM students WHERE code = $1", v).Scan(&realID)
+		err := s.dbtx(ctx).GetContext(ctx, &realID, "SELECT id FROM students WHERE code = $1", v)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return 0, domain.ErrNotFound
@@ -56,7 +56,7 @@ func (s *StudentStore) ResolveID(ctx context.Context, studentID any) (int64, err
 // LockAndGetBalance retrieves student's current balance with a row-level lock (FOR UPDATE).
 func (s *StudentStore) LockAndGetBalance(ctx context.Context, id int64) (int64, error) {
 	var currentBalance int64
-	err := s.dbtx(ctx).QueryRowContext(ctx, "SELECT balance_cents FROM students WHERE id = $1 FOR UPDATE", id).Scan(&currentBalance)
+	err := s.dbtx(ctx).GetContext(ctx, &currentBalance, "SELECT balance_cents FROM students WHERE id = $1 FOR UPDATE", id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, domain.ErrNotFound
 	}
@@ -83,21 +83,12 @@ func (s *StudentStore) List(ctx context.Context, q domain.Query) ([]domain.Stude
 	qb.Limit(q.Limit)
 
 	query, args := qb.Build()
-	rows, err := s.dbtx(ctx).QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
 	var list []domain.Student
-	for rows.Next() {
-		var item domain.Student
-		if err := rows.Scan(&item.ID, &item.Code, &item.Name, &item.Guardian, &item.Phone, &item.Balance, &item.Note, &item.Active, &item.CreatedAt); err != nil {
-			return nil, err
-		}
-		list = append(list, item)
+	err := s.dbtx(ctx).SelectContext(ctx, &list, query, args...)
+	if list == nil {
+		list = []domain.Student{}
 	}
-	return list, rows.Err()
+	return list, err
 }
 
 func (s *StudentStore) Get(ctx context.Context, idOrCode string) (domain.Student, error) {
@@ -114,9 +105,7 @@ func (s *StudentStore) Get(ctx context.Context, idOrCode string) (domain.Student
 		args = []any{idOrCode}
 	}
 
-	err := s.dbtx(ctx).QueryRowContext(ctx, query, args...).Scan(
-		&item.ID, &item.Code, &item.Name, &item.Guardian, &item.Phone, &item.Balance, &item.Note, &item.Active, &item.CreatedAt,
-	)
+	err := s.dbtx(ctx).GetContext(ctx, &item, query, args...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Student{}, domain.ErrNotFound
 	}
@@ -135,12 +124,12 @@ func (s *StudentStore) Save(ctx context.Context, v *domain.Student) error {
 	}
 
 	if v.ID == 0 {
-		return s.dbtx(ctx).QueryRowContext(ctx,
+		return s.dbtx(ctx).GetContext(ctx, &v.ID,
 			`INSERT INTO students (code, name, guardian, phone, balance_cents, note, active, created_at)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 			 RETURNING id`,
 			v.Code, v.Name, v.Guardian, v.Phone, v.Balance, v.Note, v.Active, v.CreatedAt,
-		).Scan(&v.ID)
+		)
 	}
 
 	res, err := s.dbtx(ctx).ExecContext(ctx,

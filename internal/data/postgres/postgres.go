@@ -12,13 +12,15 @@ import (
 	"mygo-app/internal/domain"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jmoiron/sqlx"
 )
 
 // Repo is the PostgreSQL implementation of domain.Repo.
 // It acts as the composition root that coordinates connection lifecycle,
 // database migrations, and assembles fully decoupled sub-stores.
 type Repo struct {
-	db         *sql.DB
+	db         *sqlx.DB
+	rawDB      *sql.DB
 	dsn        string
 	txm        TxManager
 	students   *StudentStore
@@ -34,26 +36,28 @@ type Repo struct {
 
 // Open connects to PostgreSQL, runs schema migrations, and wires together decoupled stores.
 func Open(ctx context.Context, dsn string) (domain.Repo, error) {
-	db, err := sql.Open("pgx", dsn)
+	rawDB, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres %s: %w", SanitizeDSN(dsn), err)
 	}
 
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(10)
-	db.SetConnMaxLifetime(5 * time.Minute)
+	rawDB.SetMaxOpenConns(25)
+	rawDB.SetMaxIdleConns(10)
+	rawDB.SetConnMaxLifetime(5 * time.Minute)
 
 	pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer pingCancel()
-	if err := db.PingContext(pingCtx); err != nil {
-		_ = db.Close()
+	if err := rawDB.PingContext(pingCtx); err != nil {
+		_ = rawDB.Close()
 		return nil, fmt.Errorf("ping postgres %s: %w", SanitizeDSN(dsn), err)
 	}
 
-	if err := Migrate(ctx, db, "up"); err != nil {
-		_ = db.Close()
+	if err := Migrate(ctx, rawDB, "up"); err != nil {
+		_ = rawDB.Close()
 		return nil, fmt.Errorf("migrate postgres: %w", err)
 	}
+
+	db := sqlx.NewDb(rawDB, "postgres")
 
 	// Wire decoupled components
 	txm := NewTxManager(db)
@@ -69,6 +73,7 @@ func Open(ctx context.Context, dsn string) (domain.Repo, error) {
 
 	r := &Repo{
 		db:         db,
+		rawDB:      rawDB,
 		dsn:        dsn,
 		txm:        txm,
 		students:   students,
@@ -118,7 +123,7 @@ func (r *Repo) Stats(ctx context.Context) (domain.Stats, error) {
 	var st domain.Stats
 	count := func(query string) (int64, error) {
 		var n int64
-		err := r.db.QueryRowContext(ctx, query).Scan(&n)
+		err := r.db.GetContext(ctx, &n, query)
 		if err != nil {
 			return 0, err
 		}
@@ -159,7 +164,7 @@ func (r *Repo) Stats(ctx context.Context) (domain.Stats, error) {
 
 func (r *Repo) ensureAdmin(ctx context.Context) error {
 	var count int64
-	err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users WHERE username = 'admin'").Scan(&count)
+	err := r.db.GetContext(ctx, &count, "SELECT COUNT(*) FROM users WHERE username = 'admin'")
 	if err != nil {
 		return err
 	}
@@ -191,7 +196,7 @@ func (r *Repo) ensureAdmin(ctx context.Context) error {
 
 func (r *Repo) seed(ctx context.Context) error {
 	var count int64
-	if err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM teachers").Scan(&count); err != nil {
+	if err := r.db.GetContext(ctx, &count, "SELECT COUNT(*) FROM teachers"); err != nil {
 		return err
 	}
 	if count > 0 {

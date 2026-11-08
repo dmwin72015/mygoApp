@@ -21,7 +21,7 @@ func (s *SettingsStore) dbtx(ctx context.Context) DBTX {
 
 func (s *SettingsStore) Get(ctx context.Context, key string) (string, error) {
 	var val string
-	err := s.dbtx(ctx).QueryRowContext(ctx, "SELECT value FROM settings WHERE key = $1", key).Scan(&val)
+	err := s.dbtx(ctx).GetContext(ctx, &val, "SELECT value FROM settings WHERE key = $1", key)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}

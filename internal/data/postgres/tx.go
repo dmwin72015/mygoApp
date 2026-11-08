@@ -4,16 +4,22 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"github.com/jmoiron/sqlx"
 )
 
 // txContextKey is the private context key for active transaction propagation.
 type txContextKey struct{}
 
-// DBTX is the common interface implemented by *sql.DB and *sql.Tx.
+// DBTX is the common interface implemented by *sqlx.DB and *sqlx.Tx.
 type DBTX interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	GetContext(ctx context.Context, dest any, query string, args ...any) error
+	SelectContext(ctx context.Context, dest any, query string, args ...any) error
+	NamedExecContext(ctx context.Context, query string, arg any) (sql.Result, error)
+	Rebind(query string) string
 }
 
 // TxManager manages atomic database transactions with context propagation,
@@ -24,22 +30,22 @@ type TxManager interface {
 }
 
 type txManager struct {
-	db *sql.DB
+	db *sqlx.DB
 }
 
 // NewTxManager creates a new transaction manager bound to the DB connection pool.
-func NewTxManager(db *sql.DB) TxManager {
+func NewTxManager(db *sqlx.DB) TxManager {
 	return &txManager{db: db}
 }
 
 // WithTx returns a child context carrying the active transaction.
-func WithTx(ctx context.Context, tx *sql.Tx) context.Context {
+func WithTx(ctx context.Context, tx *sqlx.Tx) context.Context {
 	return context.WithValue(ctx, txContextKey{}, tx)
 }
 
 // TxFromContext retrieves an active transaction from context, if any.
-func TxFromContext(ctx context.Context) *sql.Tx {
-	if tx, ok := ctx.Value(txContextKey{}).(*sql.Tx); ok {
+func TxFromContext(ctx context.Context) *sqlx.Tx {
+	if tx, ok := ctx.Value(txContextKey{}).(*sqlx.Tx); ok {
 		return tx
 	}
 	return nil
@@ -70,7 +76,7 @@ func (tm *txManager) RunInTxLevel(ctx context.Context, level sql.IsolationLevel,
 		opts = &sql.TxOptions{Isolation: level}
 	}
 
-	tx, beginErr := tm.db.BeginTx(ctx, opts)
+	tx, beginErr := tm.db.BeginTxx(ctx, opts)
 	if beginErr != nil {
 		return fmt.Errorf("begin transaction: %w", beginErr)
 	}

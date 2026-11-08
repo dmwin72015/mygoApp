@@ -6,23 +6,26 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/jmoiron/sqlx"
 )
 
 func TestTxManager_LivePostgres(t *testing.T) {
 	dsn := "postgres://postgres:root1234@127.0.0.1:15432/school?sslmode=disable"
-	db, err := sql.Open("pgx", dsn)
+	rawDB, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Skip("skipping live postgres test: driver error")
 	}
-	defer db.Close()
+	defer rawDB.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	if err := db.PingContext(ctx); err != nil {
+	if err := rawDB.PingContext(ctx); err != nil {
 		t.Skipf("skipping live postgres test: cannot reach %s (%v)", SanitizeDSN(dsn), err)
 	}
 
+	db := sqlx.NewDb(rawDB, "postgres")
 	txm := NewTxManager(db)
 	settings := NewSettingsStore(db)
 

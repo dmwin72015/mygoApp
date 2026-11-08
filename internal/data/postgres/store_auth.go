@@ -31,14 +31,15 @@ func (a *AuthStore) dbtx(ctx context.Context) DBTX {
 }
 
 func (a *AuthStore) Login(ctx context.Context, username, password string) (domain.User, error) {
-	var (
-		u          domain.User
-		salt, hash string
-	)
-	err := a.dbtx(ctx).QueryRowContext(ctx,
+	var row struct {
+		domain.User
+		Salt string `db:"salt"`
+		Hash string `db:"hash"`
+	}
+	err := a.dbtx(ctx).GetContext(ctx, &row,
 		"SELECT id, code, username, display_name, role, salt, hash, created_at FROM users WHERE username = $1",
 		username,
-	).Scan(&u.ID, &u.Code, &u.Username, &u.DisplayName, &u.Role, &salt, &hash, &u.CreatedAt)
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.User{}, domain.ErrBadCredentials
 	}
@@ -46,10 +47,10 @@ func (a *AuthStore) Login(ctx context.Context, username, password string) (domai
 		return domain.User{}, err
 	}
 
-	if !crypto.CheckPassword(password, salt, hash) {
+	if !crypto.CheckPassword(password, row.Salt, row.Hash) {
 		return domain.User{}, domain.ErrBadCredentials
 	}
-	return u, nil
+	return row.User, nil
 }
 
 func (a *AuthStore) ResetPassword(ctx context.Context, username, recoveryKey, newPassword string) error {
@@ -76,7 +77,7 @@ func (a *AuthStore) ResetPassword(ctx context.Context, username, recoveryKey, ne
 	}
 
 	var userID int64
-	err = a.dbtx(ctx).QueryRowContext(ctx, "SELECT id FROM users WHERE username = $1", username).Scan(&userID)
+	err = a.dbtx(ctx).GetContext(ctx, &userID, "SELECT id FROM users WHERE username = $1", username)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.ErrUserNotFound
 	}
@@ -108,13 +109,14 @@ func (a *AuthStore) Register(ctx context.Context, username, password, displayNam
 	if displayName == "" {
 		displayName = username
 	}
-	user := domain.User{
+
+	u := domain.User{
 		Username:    username,
 		DisplayName: displayName,
 		Role:        string(domain.RoleStaff),
 	}
-	if err := a.users.Create(ctx, &user, password); err != nil {
+	if err := a.users.Create(ctx, &u, password); err != nil {
 		return domain.User{}, err
 	}
-	return user, nil
+	return u, nil
 }

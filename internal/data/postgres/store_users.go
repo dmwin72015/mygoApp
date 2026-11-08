@@ -26,23 +26,14 @@ func (u *UserStore) dbtx(ctx context.Context) DBTX {
 }
 
 func (u *UserStore) List(ctx context.Context) ([]domain.User, error) {
-	rows, err := u.dbtx(ctx).QueryContext(ctx,
+	var list []domain.User
+	err := u.dbtx(ctx).SelectContext(ctx, &list,
 		"SELECT id, code, username, display_name, role, created_at FROM users ORDER BY id ASC",
 	)
-	if err != nil {
-		return nil, err
+	if list == nil {
+		list = []domain.User{}
 	}
-	defer rows.Close()
-
-	var list []domain.User
-	for rows.Next() {
-		var item domain.User
-		if err := rows.Scan(&item.ID, &item.Code, &item.Username, &item.DisplayName, &item.Role, &item.CreatedAt); err != nil {
-			return nil, err
-		}
-		list = append(list, item)
-	}
-	return list, rows.Err()
+	return list, err
 }
 
 func (u *UserStore) Create(ctx context.Context, v *domain.User, password string) error {
@@ -63,12 +54,12 @@ func (u *UserStore) Create(ctx context.Context, v *domain.User, password string)
 		v.CreatedAt = time.Now()
 	}
 
-	err = u.dbtx(ctx).QueryRowContext(ctx,
+	err = u.dbtx(ctx).GetContext(ctx, &v.ID,
 		`INSERT INTO users (code, username, display_name, role, salt, hash, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 RETURNING id`,
 		v.Code, v.Username, v.DisplayName, v.Role, salt, hash, v.CreatedAt,
-	).Scan(&v.ID)
+	)
 	if err != nil && (strings.Contains(err.Error(), "unique") || strings.Contains(err.Error(), "duplicate")) {
 		return errors.New("用户名已存在")
 	}
@@ -110,7 +101,7 @@ func (u *UserStore) resolveUserID(ctx context.Context, id any) (int64, error) {
 			return num, nil
 		}
 		var realID int64
-		err := u.dbtx(ctx).QueryRowContext(ctx, "SELECT id FROM users WHERE code = $1 OR username = $2", v, v).Scan(&realID)
+		err := u.dbtx(ctx).GetContext(ctx, &realID, "SELECT id FROM users WHERE code = $1 OR username = $2", v, v)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return 0, domain.ErrNotFound
@@ -167,10 +158,10 @@ func (u *UserStore) Delete(ctx context.Context, id any) error {
 
 func (u *UserStore) keepOneAdmin(ctx context.Context, id int64) error {
 	var remainingAdminCount int64
-	err := u.dbtx(ctx).QueryRowContext(ctx,
+	err := u.dbtx(ctx).GetContext(ctx, &remainingAdminCount,
 		"SELECT COUNT(*) FROM users WHERE role = 'admin' AND id <> $1",
 		id,
-	).Scan(&remainingAdminCount)
+	)
 	if err != nil {
 		return err
 	}
@@ -179,7 +170,7 @@ func (u *UserStore) keepOneAdmin(ctx context.Context, id int64) error {
 	}
 
 	var currentRole string
-	err = u.dbtx(ctx).QueryRowContext(ctx, "SELECT role FROM users WHERE id = $1", id).Scan(&currentRole)
+	err = u.dbtx(ctx).GetContext(ctx, &currentRole, "SELECT role FROM users WHERE id = $1", id)
 	if err != nil {
 		return err
 	}

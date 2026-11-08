@@ -7,12 +7,12 @@ import (
 
 // User represents an operator or administrator in the system.
 type User struct {
-	ID          int64     `json:"id"`
-	Code        string    `json:"code"`
-	Username    string    `json:"username"`
-	DisplayName string    `json:"displayName"`
-	Role        string    `json:"role"`
-	CreatedAt   time.Time `json:"createdAt"`
+	ID          int64     `json:"id" db:"id"`
+	Code        string    `json:"code" db:"code"`
+	Username    string    `json:"username" db:"username"`
+	DisplayName string    `json:"displayName" db:"display_name"`
+	Role        string    `json:"role" db:"role"`
+	CreatedAt   time.Time `json:"createdAt" db:"created_at"`
 }
 
 // Name returns DisplayName if available, falling back to Username.

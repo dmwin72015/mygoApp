@@ -31,21 +31,12 @@ func (t *TeacherStore) List(ctx context.Context, q domain.Query) ([]domain.Teach
 	qb.Limit(q.Limit)
 
 	query, args := qb.Build()
-	rows, err := t.dbtx(ctx).QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
 	var list []domain.Teacher
-	for rows.Next() {
-		var item domain.Teacher
-		if err := rows.Scan(&item.ID, &item.Code, &item.Name, &item.Phone, &item.Subject, &item.RateCents, &item.Active, &item.CreatedAt); err != nil {
-			return nil, err
-		}
-		list = append(list, item)
+	err := t.dbtx(ctx).SelectContext(ctx, &list, query, args...)
+	if list == nil {
+		list = []domain.Teacher{}
 	}
-	return list, rows.Err()
+	return list, err
 }
 
 func (t *TeacherStore) Get(ctx context.Context, idOrCode string) (domain.Teacher, error) {
@@ -62,9 +53,7 @@ func (t *TeacherStore) Get(ctx context.Context, idOrCode string) (domain.Teacher
 		args = []any{idOrCode}
 	}
 
-	err := t.dbtx(ctx).QueryRowContext(ctx, query, args...).Scan(
-		&item.ID, &item.Code, &item.Name, &item.Phone, &item.Subject, &item.RateCents, &item.Active, &item.CreatedAt,
-	)
+	err := t.dbtx(ctx).GetContext(ctx, &item, query, args...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Teacher{}, domain.ErrNotFound
 	}
@@ -83,12 +72,12 @@ func (t *TeacherStore) Save(ctx context.Context, v *domain.Teacher) error {
 	}
 
 	if v.ID == 0 {
-		return t.dbtx(ctx).QueryRowContext(ctx,
+		return t.dbtx(ctx).GetContext(ctx, &v.ID,
 			`INSERT INTO teachers (code, name, phone, subject, rate_cents, active, created_at)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7)
 			 RETURNING id`,
 			v.Code, v.Name, v.Phone, v.Subject, v.RateCents, v.Active, v.CreatedAt,
-		).Scan(&v.ID)
+		)
 	}
 
 	res, err := t.dbtx(ctx).ExecContext(ctx,
