@@ -394,9 +394,10 @@ func (l *Login) renderSignInCard(c *ui.Context, t *ui.Theme, tok *tokens.Semanti
 				if ui.TextInput(c, &l.captchaCode).Placeholder(i18n.T("auth.captcha_ph")).Width(160).Submitted() {
 					l.submit()
 				}
+				ui.Spacer(c)
 				if l.captchaImg != nil {
 					if ui.Image(c, l.captchaImg).
-						Width(110).
+						Width(120).
 						Height(36).
 						Radius(4).
 						Cursor(ui.CursorPointer).
@@ -572,4 +573,3 @@ func errText(err error) string {
 	}
 	return err.Error()
 }
-
