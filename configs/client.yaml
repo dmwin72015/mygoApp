@@ -1,0 +1,4 @@
+driver: remote
+api_url: http://127.0.0.1:8099
+sqlite_path: school.db
+token: ""

@@ -23,6 +23,11 @@ func (u User) Name() string {
 	return u.Username
 }
 
+// SetIdentity binds the numeric ID or string Code based on the incoming raw identity string.
+func (u *User) SetIdentity(rawID string) {
+	SetEntityIdentity(&u.ID, &u.Code, rawID)
+}
+
 // Auth signs a user in, registers new accounts, or resets credentials with a recovery key.
 type Auth interface {
 	Login(ctx context.Context, username, password string) (User, error)

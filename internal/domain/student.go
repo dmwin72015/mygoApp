@@ -14,3 +14,8 @@ type Student struct {
 	Active    bool      `json:"active"`
 	CreatedAt time.Time `json:"createdAt"`
 }
+
+// SetIdentity binds the numeric ID or business code.
+func (s *Student) SetIdentity(rawID string) {
+	SetEntityIdentity(&s.ID, &s.Code, rawID)
+}

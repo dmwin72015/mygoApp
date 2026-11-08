@@ -1,0 +1,15 @@
+# 启明培训 · 客户端配置文件 (Client Configuration)
+
+# 数据源驱动模式:
+#   "remote" - 远程服务端模式 (通过 Server REST API 读写 PostgreSQL 数据库，支持多人协同与集中管理)
+#   "sqlite" - 本地单机离线模式 (直接读写本地 SQLite 文件 school.db)
+driver: "remote"
+
+# 远程服务端 API 基础地址 (当 driver 为 remote 时生效)
+api_url: "http://127.0.0.1:8099"
+
+# 本地 SQLite 文件路径 (当 driver 为 sqlite 时生效)
+sqlite_path: "school.db"
+
+# 预置 Bearer Token (选填，登录后会自动刷新并保持会话)
+token: ""

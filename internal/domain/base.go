@@ -4,9 +4,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync/atomic"
 	"time"
 )
+
+// Identifiable represents an entity that can bind its identity (ID or Code) from a raw string.
+type Identifiable interface {
+	SetIdentity(rawID string)
+}
+
+// SetEntityIdentity parses rawID: if numeric positive int, sets idField; otherwise sets codeField.
+func SetEntityIdentity(idField *int64, codeField *string, rawID string) {
+	if num, err := strconv.ParseInt(rawID, 10, 64); err == nil && num > 0 {
+		*idField = num
+	} else {
+		*codeField = rawID
+	}
+}
 
 // ErrNotFound is what a store returns for an ID it does not hold.
 var ErrNotFound = errors.New("not found")
