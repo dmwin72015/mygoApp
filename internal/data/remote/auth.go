@@ -15,6 +15,12 @@ type remoteAuth struct {
 	c *Client
 }
 
+const (
+	LoginAPI     = "/auth/login"
+	ResetPassAPI = "/auth/reset-password"
+	RegisterAPI  = "/auth/register"
+)
+
 func newAuth(c *Client) domain.Auth {
 	return remoteAuth{c: c}
 }
@@ -32,7 +38,7 @@ func (a remoteAuth) Login(ctx context.Context, username, password string) (domai
 		body["captcha_id"] = cred.ID
 		body["captcha_code"] = cred.Code
 	}
-	err := a.c.Do(ctx, http.MethodPost, "/auth/login", body, &res)
+	err := a.c.Do(ctx, http.MethodPost, LoginAPI, body, &res)
 	if err != nil {
 		var apiErr *APIError
 		if errors.As(err, &apiErr) && apiErr.Status == http.StatusUnauthorized {
@@ -52,7 +58,7 @@ func (a remoteAuth) ResetPassword(ctx context.Context, username, recoveryKey, ne
 		OK      bool   `json:"ok"`
 		Message string `json:"message"`
 	}
-	err := a.c.Do(ctx, http.MethodPost, "/auth/reset-password", map[string]string{
+	err := a.c.Do(ctx, http.MethodPost, ResetPassAPI, map[string]string{
 		"username":     username,
 		"recovery_key": recoveryKey,
 		"new_password": newPassword,
@@ -80,7 +86,7 @@ func (a remoteAuth) Register(ctx context.Context, username, password, displayNam
 		Token string      `json:"token"`
 		User  domain.User `json:"user"`
 	}
-	err := a.c.Do(ctx, http.MethodPost, "/auth/register", map[string]string{
+	err := a.c.Do(ctx, http.MethodPost, RegisterAPI, map[string]string{
 		"username":     username,
 		"password":     password,
 		"display_name": displayName,
