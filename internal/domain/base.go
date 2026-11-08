@@ -1,0 +1,54 @@
+package domain
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync/atomic"
+	"time"
+)
+
+// ErrNotFound is what a store returns for an ID it does not hold.
+var ErrNotFound = errors.New("not found")
+
+// ErrBadCredentials is what Login returns for an unknown user or a wrong password.
+var ErrBadCredentials = errors.New("用户名或密码不正确")
+
+// Query narrows a list: Search matches name or phone, Limit 0 means no limit.
+type Query struct {
+	Search string
+	Limit  int
+}
+
+// Store is the generic CRUD interface every entity has.
+type Store[T any] interface {
+	List(ctx context.Context, q Query) ([]T, error)
+	Get(ctx context.Context, id string) (T, error)
+	// Save inserts when the ID is empty, and updates otherwise.
+	Save(ctx context.Context, v *T) error
+	Delete(ctx context.Context, id string) error
+}
+
+// Repo is everything a page or service needs from storage.
+type Repo interface {
+	Auth() Auth
+	Settings() Settings
+	Users() UserStore
+	Students() Store[Student]
+	Teachers() Store[Teacher]
+	Classrooms() Store[Classroom]
+	Courses() Store[Course]
+	Lessons() Store[Lesson]
+	Ledger() Ledger
+	Stats(ctx context.Context) (Stats, error)
+	Close() error
+	// Source names the store for system settings / health.
+	Source() string
+}
+
+var idSeq atomic.Uint64
+
+// NewID creates a timestamp-ordered unique ID without external dependencies.
+func NewID(prefix string) string {
+	return fmt.Sprintf("%s_%x%03x", prefix, time.Now().UnixMilli(), idSeq.Add(1)&0xfff)
+}

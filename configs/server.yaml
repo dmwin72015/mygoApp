@@ -1,0 +1,26 @@
+# 启明培训 · 服务端配置文件 (Server Configuration)
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  # 运行模式: debug (开发调试模式) | release (生产高性能模式)
+  mode: "release"
+  read_timeout: "15s"
+  write_timeout: "15s"
+  idle_timeout: "60s"
+
+database:
+  # 数据库驱动: postgres (生产推荐) | sqlite (轻量/本地模式)
+  driver: "postgres"
+  # PostgreSQL 连接串格式: postgres://username:password@host:port/dbname?sslmode=disable
+  # 若使用 SQLite，则配置为文件路径，例如: "school.db"
+  dsn: "postgres://postgres:password@127.0.0.1:5432/school?sslmode=disable"
+  max_open_conns: 25
+  max_idle_conns: 10
+  conn_max_lifetime: "5m"
+
+migrate:
+  # 服务端启动时是否自动执行 SQL 迁移 (Up)
+  auto: true
+  # 默认迁移动作: up (应用最新) | status (仅查看状态) | none (跳过迁移)
+  action: "up"

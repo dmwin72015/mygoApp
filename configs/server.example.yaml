@@ -1,0 +1,20 @@
+# 启明培训 · 服务端配置参考模板 (Reference Example)
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  mode: "release"
+  read_timeout: "15s"
+  write_timeout: "15s"
+  idle_timeout: "60s"
+
+database:
+  driver: "postgres" # postgres | sqlite
+  dsn: "postgres://postgres:password@127.0.0.1:5432/school?sslmode=disable"
+  max_open_conns: 25
+  max_idle_conns: 10
+  conn_max_lifetime: "5m"
+
+migrate:
+  auto: true
+  action: "up"

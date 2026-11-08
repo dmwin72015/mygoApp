@@ -1,0 +1,5 @@
+/build/
+/.mygo/
+/.workbuddy/
+mygo_windows_*.syso
+
