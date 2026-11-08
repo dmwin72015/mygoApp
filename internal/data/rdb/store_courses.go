@@ -1,4 +1,4 @@
-package postgres
+package rdb
 
 import (
 	"context"
@@ -10,13 +10,14 @@ import (
 	"mygo-app/internal/domain"
 )
 
-// CourseStore manages courses in PostgreSQL.
+// CourseStore manages courses across relational databases.
 type CourseStore struct {
-	db DBTX
+	db      DBTX
+	dialect *Dialect
 }
 
-func NewCourseStore(db DBTX) *CourseStore {
-	return &CourseStore{db: db}
+func NewCourseStore(db DBTX, dialect *Dialect) *CourseStore {
+	return &CourseStore{db: db, dialect: dialect}
 }
 
 func (s *CourseStore) dbtx(ctx context.Context) DBTX {
@@ -24,7 +25,7 @@ func (s *CourseStore) dbtx(ctx context.Context) DBTX {
 }
 
 func (s *CourseStore) List(ctx context.Context, q domain.Query) ([]domain.Course, error) {
-	qb := NewQueryBuilder("SELECT id, code, name, subject, teacher_id, total_lessons, price_cents, minutes, active FROM courses")
+	qb := NewQueryBuilder(s.dialect, "SELECT id, code, name, subject, teacher_id, total_lessons, price_cents, minutes, active FROM courses")
 	qb.WhereSearch(q.Search, "name", "subject", "code")
 	qb.OrderBy("id DESC")
 	qb.Limit(q.Limit)
@@ -45,10 +46,10 @@ func (s *CourseStore) Get(ctx context.Context, idOrCode string) (domain.Course, 
 		args  []any
 	)
 	if numID, err := strconv.ParseInt(idOrCode, 10, 64); err == nil && numID > 0 {
-		query = "SELECT id, code, name, subject, teacher_id, total_lessons, price_cents, minutes, active FROM courses WHERE id = $1 OR code = $2"
+		query = s.dialect.Rebind("SELECT id, code, name, subject, teacher_id, total_lessons, price_cents, minutes, active FROM courses WHERE id = ? OR code = ?")
 		args = []any{numID, idOrCode}
 	} else {
-		query = "SELECT id, code, name, subject, teacher_id, total_lessons, price_cents, minutes, active FROM courses WHERE code = $1"
+		query = s.dialect.Rebind("SELECT id, code, name, subject, teacher_id, total_lessons, price_cents, minutes, active FROM courses WHERE code = ?")
 		args = []any{idOrCode}
 	}
 
@@ -68,18 +69,24 @@ func (s *CourseStore) Save(ctx context.Context, v *domain.Course) error {
 	}
 
 	if v.ID == 0 {
-		return s.dbtx(ctx).GetContext(ctx, &v.ID,
+		newID, err := s.dialect.InsertAndGetID(ctx, s.dbtx(ctx),
 			`INSERT INTO courses (code, name, subject, teacher_id, total_lessons, price_cents, minutes, active)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-			 RETURNING id`,
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			v.Code, v.Name, v.Subject, v.TeacherID, v.TotalLessons, v.PriceCents, v.Minutes, v.Active,
 		)
+		if err != nil {
+			return err
+		}
+		v.ID = newID
+		return nil
 	}
 
-	res, err := s.dbtx(ctx).ExecContext(ctx,
+	query := s.dialect.Rebind(
 		`UPDATE courses SET
-			name = $1, subject = $2, teacher_id = $3, total_lessons = $4, price_cents = $5, minutes = $6, active = $7
-		 WHERE id = $8`,
+			name = ?, subject = ?, teacher_id = ?, total_lessons = ?, price_cents = ?, minutes = ?, active = ?
+		 WHERE id = ?`,
+	)
+	res, err := s.dbtx(ctx).ExecContext(ctx, query,
 		v.Name, v.Subject, v.TeacherID, v.TotalLessons, v.PriceCents, v.Minutes, v.Active, v.ID,
 	)
 	if err != nil {
@@ -98,10 +105,10 @@ func (s *CourseStore) Delete(ctx context.Context, idOrCode string) error {
 		args  []any
 	)
 	if numID, err := strconv.ParseInt(idOrCode, 10, 64); err == nil && numID > 0 {
-		query = "DELETE FROM courses WHERE id = $1 OR code = $2"
+		query = s.dialect.Rebind("DELETE FROM courses WHERE id = ? OR code = ?")
 		args = []any{numID, idOrCode}
 	} else {
-		query = "DELETE FROM courses WHERE code = $1"
+		query = s.dialect.Rebind("DELETE FROM courses WHERE code = ?")
 		args = []any{idOrCode}
 	}
 

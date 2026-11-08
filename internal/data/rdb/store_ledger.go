@@ -1,4 +1,4 @@
-package postgres
+package rdb
 
 import (
 	"context"
@@ -11,24 +11,24 @@ import (
 )
 
 // StudentBalanceService abstracts operations on students required by Ledger.
-// This decouples the Ledger store from direct knowledge of the students table.
 type StudentBalanceService interface {
 	ResolveID(ctx context.Context, studentID any) (int64, error)
 	LockAndGetBalance(ctx context.Context, id int64) (int64, error)
 	UpdateBalance(ctx context.Context, id int64, newBalance int64) error
 }
 
-// LedgerStore manages financial ledger transactions in PostgreSQL.
+// LedgerStore manages financial ledger transactions across relational databases.
 type LedgerStore struct {
 	db       DBTX
+	dialect  *Dialect
 	txm      TxManager
 	students StudentBalanceService
 }
 
-// NewLedgerStore creates a decoupled LedgerStore.
-func NewLedgerStore(db DBTX, txm TxManager, students StudentBalanceService) *LedgerStore {
+func NewLedgerStore(db DBTX, dialect *Dialect, txm TxManager, students StudentBalanceService) *LedgerStore {
 	return &LedgerStore{
 		db:       db,
+		dialect:  dialect,
 		txm:      txm,
 		students: students,
 	}
@@ -39,7 +39,7 @@ func (l *LedgerStore) dbtx(ctx context.Context) DBTX {
 }
 
 func (l *LedgerStore) List(ctx context.Context, studentID any, limit int) ([]domain.LedgerEntry, error) {
-	qb := NewQueryBuilder("SELECT id, code, student_id, kind, amount_cents, balance_cents, note, at FROM ledger")
+	qb := NewQueryBuilder(l.dialect, "SELECT id, code, student_id, kind, amount_cents, balance_cents, note, at FROM ledger")
 	if studentID != nil && studentID != "" && studentID != int64(0) {
 		stuID, err := l.students.ResolveID(ctx, studentID)
 		if err == nil {
@@ -101,12 +101,16 @@ func (l *LedgerStore) apply(ctx context.Context, studentID any, kind string, del
 			At:        time.Now(),
 		}
 
-		return l.dbtx(txCtx).GetContext(txCtx, &entry.ID,
+		newID, err := l.dialect.InsertAndGetID(txCtx, l.dbtx(txCtx),
 			`INSERT INTO ledger (code, student_id, kind, amount_cents, balance_cents, note, at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7)
-			 RETURNING id`,
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			entry.Code, entry.StudentID, entry.Kind, entry.Amount, entry.Balance, entry.Note, entry.At,
 		)
+		if err != nil {
+			return err
+		}
+		entry.ID = newID
+		return nil
 	})
 
 	if err != nil {

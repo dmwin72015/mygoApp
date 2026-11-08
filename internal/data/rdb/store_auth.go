@@ -1,4 +1,4 @@
-package postgres
+package rdb
 
 import (
 	"context"
@@ -11,16 +11,17 @@ import (
 )
 
 // AuthStore handles user authentication, password resets and self-registration.
-// It depends strictly on domain.UserStore and domain.Settings interfaces.
 type AuthStore struct {
 	db       DBTX
+	dialect  *Dialect
 	users    domain.UserStore
 	settings domain.Settings
 }
 
-func NewAuthStore(db DBTX, users domain.UserStore, settings domain.Settings) *AuthStore {
+func NewAuthStore(db DBTX, dialect *Dialect, users domain.UserStore, settings domain.Settings) *AuthStore {
 	return &AuthStore{
 		db:       db,
+		dialect:  dialect,
 		users:    users,
 		settings: settings,
 	}
@@ -36,10 +37,8 @@ func (a *AuthStore) Login(ctx context.Context, username, password string) (domai
 		Salt string `db:"salt"`
 		Hash string `db:"hash"`
 	}
-	err := a.dbtx(ctx).GetContext(ctx, &row,
-		"SELECT id, code, username, display_name, role, salt, hash, created_at FROM users WHERE username = $1",
-		username,
-	)
+	query := a.dialect.Rebind("SELECT id, code, username, display_name, role, salt, hash, created_at FROM users WHERE username = ?")
+	err := a.dbtx(ctx).GetContext(ctx, &row, query, username)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.User{}, domain.ErrBadCredentials
 	}
@@ -77,7 +76,8 @@ func (a *AuthStore) ResetPassword(ctx context.Context, username, recoveryKey, ne
 	}
 
 	var userID int64
-	err = a.dbtx(ctx).GetContext(ctx, &userID, "SELECT id FROM users WHERE username = $1", username)
+	query := a.dialect.Rebind("SELECT id FROM users WHERE username = ?")
+	err = a.dbtx(ctx).GetContext(ctx, &userID, query, username)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.ErrUserNotFound
 	}
@@ -90,10 +90,8 @@ func (a *AuthStore) ResetPassword(ctx context.Context, username, recoveryKey, ne
 		return err
 	}
 
-	_, err = a.dbtx(ctx).ExecContext(ctx,
-		"UPDATE users SET salt = $1, hash = $2 WHERE id = $3",
-		salt, hash, userID,
-	)
+	updateQuery := a.dialect.Rebind("UPDATE users SET salt = ?, hash = ? WHERE id = ?")
+	_, err = a.dbtx(ctx).ExecContext(ctx, updateQuery, salt, hash, userID)
 	return err
 }
 

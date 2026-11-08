@@ -1,4 +1,4 @@
-package postgres
+package rdb
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -22,18 +23,18 @@ func TestTxManager_LivePostgres(t *testing.T) {
 	defer cancel()
 
 	if err := rawDB.PingContext(ctx); err != nil {
-		t.Skipf("skipping live postgres test: cannot reach %s (%v)", SanitizeDSN(dsn), err)
+		t.Skipf("skipping live postgres test: cannot reach %s (%v)", dsn, err)
 	}
 
 	db := sqlx.NewDb(rawDB, "postgres")
 	txm := NewTxManager(db)
-	settings := NewSettingsStore(db)
+	dialect := NewDialect("postgres")
+	settings := NewSettingsStore(db, dialect)
 
-	var key = "test_tx_key"
+	var key = "test_rdb_tx_key"
 
 	// 1. Commit on success
 	err = txm.RunInTx(ctx, func(txCtx context.Context) error {
-		// Notice settings.Set automatically runs inside the transaction via txCtx!
 		return settings.Set(txCtx, key, "committed_val")
 	})
 	if err != nil {
@@ -79,7 +80,7 @@ func TestTxManager_LivePostgres(t *testing.T) {
 		t.Fatalf("expected rollback after panic to preserve 'committed_val', got %q", val)
 	}
 
-	// 4. Nested / Reentrant transaction joins parent
+	// 4. Nested transaction joins parent
 	err = txm.RunInTx(ctx, func(txCtx context.Context) error {
 		if err := settings.Set(txCtx, key, "parent_val"); err != nil {
 			return err

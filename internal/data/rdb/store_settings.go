@@ -1,4 +1,4 @@
-package postgres
+package rdb
 
 import (
 	"context"
@@ -6,13 +6,14 @@ import (
 	"errors"
 )
 
-// SettingsStore manages key-value configurations in PostgreSQL.
+// SettingsStore manages key-value configurations across relational databases.
 type SettingsStore struct {
-	db DBTX
+	db      DBTX
+	dialect *Dialect
 }
 
-func NewSettingsStore(db DBTX) *SettingsStore {
-	return &SettingsStore{db: db}
+func NewSettingsStore(db DBTX, dialect *Dialect) *SettingsStore {
+	return &SettingsStore{db: db, dialect: dialect}
 }
 
 func (s *SettingsStore) dbtx(ctx context.Context) DBTX {
@@ -21,7 +22,8 @@ func (s *SettingsStore) dbtx(ctx context.Context) DBTX {
 
 func (s *SettingsStore) Get(ctx context.Context, key string) (string, error) {
 	var val string
-	err := s.dbtx(ctx).GetContext(ctx, &val, "SELECT value FROM settings WHERE key = $1", key)
+	query := s.dialect.GetSettingsSQL()
+	err := s.dbtx(ctx).GetContext(ctx, &val, query, key)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -29,10 +31,7 @@ func (s *SettingsStore) Get(ctx context.Context, key string) (string, error) {
 }
 
 func (s *SettingsStore) Set(ctx context.Context, key, value string) error {
-	_, err := s.dbtx(ctx).ExecContext(ctx,
-		`INSERT INTO settings (key, value) VALUES ($1, $2)
-		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-		key, value,
-	)
+	query := s.dialect.UpsertSettingsSQL()
+	_, err := s.dbtx(ctx).ExecContext(ctx, query, key, value)
 	return err
 }

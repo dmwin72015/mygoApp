@@ -1,4 +1,4 @@
-package postgres
+package rdb
 
 import (
 	"context"
@@ -11,14 +11,14 @@ import (
 	"mygo-app/internal/domain"
 )
 
-// StudentStore manages students in PostgreSQL. It is decoupled from Repo.
+// StudentStore manages students across relational databases (Postgres, MySQL, SQLite).
 type StudentStore struct {
-	db DBTX
+	db      DBTX
+	dialect *Dialect
 }
 
-// NewStudentStore creates a StudentStore.
-func NewStudentStore(db DBTX) *StudentStore {
-	return &StudentStore{db: db}
+func NewStudentStore(db DBTX, dialect *Dialect) *StudentStore {
+	return &StudentStore{db: db, dialect: dialect}
 }
 
 func (s *StudentStore) dbtx(ctx context.Context) DBTX {
@@ -41,7 +41,8 @@ func (s *StudentStore) ResolveID(ctx context.Context, studentID any) (int64, err
 			return num, nil
 		}
 		var realID int64
-		err := s.dbtx(ctx).GetContext(ctx, &realID, "SELECT id FROM students WHERE code = $1", v)
+		query := s.dialect.Rebind("SELECT id FROM students WHERE code = ?")
+		err := s.dbtx(ctx).GetContext(ctx, &realID, query, v)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return 0, domain.ErrNotFound
@@ -56,7 +57,8 @@ func (s *StudentStore) ResolveID(ctx context.Context, studentID any) (int64, err
 // LockAndGetBalance retrieves student's current balance with a row-level lock (FOR UPDATE).
 func (s *StudentStore) LockAndGetBalance(ctx context.Context, id int64) (int64, error) {
 	var currentBalance int64
-	err := s.dbtx(ctx).GetContext(ctx, &currentBalance, "SELECT balance_cents FROM students WHERE id = $1 FOR UPDATE", id)
+	query := s.dialect.Rebind("SELECT balance_cents FROM students WHERE id = ? FOR UPDATE")
+	err := s.dbtx(ctx).GetContext(ctx, &currentBalance, query, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, domain.ErrNotFound
 	}
@@ -65,7 +67,8 @@ func (s *StudentStore) LockAndGetBalance(ctx context.Context, id int64) (int64, 
 
 // UpdateBalance updates the student's balance_cents.
 func (s *StudentStore) UpdateBalance(ctx context.Context, id int64, newBalance int64) error {
-	res, err := s.dbtx(ctx).ExecContext(ctx, "UPDATE students SET balance_cents = $1 WHERE id = $2", newBalance, id)
+	query := s.dialect.Rebind("UPDATE students SET balance_cents = ? WHERE id = ?")
+	res, err := s.dbtx(ctx).ExecContext(ctx, query, newBalance, id)
 	if err != nil {
 		return err
 	}
@@ -77,7 +80,7 @@ func (s *StudentStore) UpdateBalance(ctx context.Context, id int64, newBalance i
 }
 
 func (s *StudentStore) List(ctx context.Context, q domain.Query) ([]domain.Student, error) {
-	qb := NewQueryBuilder("SELECT id, code, name, guardian, phone, balance_cents, note, active, created_at FROM students")
+	qb := NewQueryBuilder(s.dialect, "SELECT id, code, name, guardian, phone, balance_cents, note, active, created_at FROM students")
 	qb.WhereSearch(q.Search, "name", "phone", "guardian", "code")
 	qb.OrderBy("id DESC")
 	qb.Limit(q.Limit)
@@ -98,10 +101,10 @@ func (s *StudentStore) Get(ctx context.Context, idOrCode string) (domain.Student
 		args  []any
 	)
 	if numID, err := strconv.ParseInt(idOrCode, 10, 64); err == nil && numID > 0 {
-		query = "SELECT id, code, name, guardian, phone, balance_cents, note, active, created_at FROM students WHERE id = $1 OR code = $2"
+		query = s.dialect.Rebind("SELECT id, code, name, guardian, phone, balance_cents, note, active, created_at FROM students WHERE id = ? OR code = ?")
 		args = []any{numID, idOrCode}
 	} else {
-		query = "SELECT id, code, name, guardian, phone, balance_cents, note, active, created_at FROM students WHERE code = $1"
+		query = s.dialect.Rebind("SELECT id, code, name, guardian, phone, balance_cents, note, active, created_at FROM students WHERE code = ?")
 		args = []any{idOrCode}
 	}
 
@@ -124,18 +127,24 @@ func (s *StudentStore) Save(ctx context.Context, v *domain.Student) error {
 	}
 
 	if v.ID == 0 {
-		return s.dbtx(ctx).GetContext(ctx, &v.ID,
+		newID, err := s.dialect.InsertAndGetID(ctx, s.dbtx(ctx),
 			`INSERT INTO students (code, name, guardian, phone, balance_cents, note, active, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-			 RETURNING id`,
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			v.Code, v.Name, v.Guardian, v.Phone, v.Balance, v.Note, v.Active, v.CreatedAt,
 		)
+		if err != nil {
+			return err
+		}
+		v.ID = newID
+		return nil
 	}
 
-	res, err := s.dbtx(ctx).ExecContext(ctx,
+	query := s.dialect.Rebind(
 		`UPDATE students SET
-			name = $1, guardian = $2, phone = $3, balance_cents = $4, note = $5, active = $6
-		 WHERE id = $7`,
+			name = ?, guardian = ?, phone = ?, balance_cents = ?, note = ?, active = ?
+		 WHERE id = ?`,
+	)
+	res, err := s.dbtx(ctx).ExecContext(ctx, query,
 		v.Name, v.Guardian, v.Phone, v.Balance, v.Note, v.Active, v.ID,
 	)
 	if err != nil {
@@ -154,10 +163,10 @@ func (s *StudentStore) Delete(ctx context.Context, idOrCode string) error {
 		args  []any
 	)
 	if numID, err := strconv.ParseInt(idOrCode, 10, 64); err == nil && numID > 0 {
-		query = "DELETE FROM students WHERE id = $1 OR code = $2"
+		query = s.dialect.Rebind("DELETE FROM students WHERE id = ? OR code = ?")
 		args = []any{numID, idOrCode}
 	} else {
-		query = "DELETE FROM students WHERE code = $1"
+		query = s.dialect.Rebind("DELETE FROM students WHERE code = ?")
 		args = []any{idOrCode}
 	}
 

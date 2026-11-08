@@ -1,4 +1,4 @@
-package postgres
+package rdb
 
 import (
 	"context"
@@ -11,13 +11,14 @@ import (
 	"mygo-app/internal/domain"
 )
 
-// TeacherStore manages teachers in PostgreSQL.
+// TeacherStore manages teachers across relational databases.
 type TeacherStore struct {
-	db DBTX
+	db      DBTX
+	dialect *Dialect
 }
 
-func NewTeacherStore(db DBTX) *TeacherStore {
-	return &TeacherStore{db: db}
+func NewTeacherStore(db DBTX, dialect *Dialect) *TeacherStore {
+	return &TeacherStore{db: db, dialect: dialect}
 }
 
 func (t *TeacherStore) dbtx(ctx context.Context) DBTX {
@@ -25,7 +26,7 @@ func (t *TeacherStore) dbtx(ctx context.Context) DBTX {
 }
 
 func (t *TeacherStore) List(ctx context.Context, q domain.Query) ([]domain.Teacher, error) {
-	qb := NewQueryBuilder("SELECT id, code, name, phone, subject, rate_cents, active, created_at FROM teachers")
+	qb := NewQueryBuilder(t.dialect, "SELECT id, code, name, phone, subject, rate_cents, active, created_at FROM teachers")
 	qb.WhereSearch(q.Search, "name", "phone", "subject", "code")
 	qb.OrderBy("id DESC")
 	qb.Limit(q.Limit)
@@ -46,10 +47,10 @@ func (t *TeacherStore) Get(ctx context.Context, idOrCode string) (domain.Teacher
 		args  []any
 	)
 	if numID, err := strconv.ParseInt(idOrCode, 10, 64); err == nil && numID > 0 {
-		query = "SELECT id, code, name, phone, subject, rate_cents, active, created_at FROM teachers WHERE id = $1 OR code = $2"
+		query = t.dialect.Rebind("SELECT id, code, name, phone, subject, rate_cents, active, created_at FROM teachers WHERE id = ? OR code = ?")
 		args = []any{numID, idOrCode}
 	} else {
-		query = "SELECT id, code, name, phone, subject, rate_cents, active, created_at FROM teachers WHERE code = $1"
+		query = t.dialect.Rebind("SELECT id, code, name, phone, subject, rate_cents, active, created_at FROM teachers WHERE code = ?")
 		args = []any{idOrCode}
 	}
 
@@ -72,18 +73,24 @@ func (t *TeacherStore) Save(ctx context.Context, v *domain.Teacher) error {
 	}
 
 	if v.ID == 0 {
-		return t.dbtx(ctx).GetContext(ctx, &v.ID,
+		newID, err := t.dialect.InsertAndGetID(ctx, t.dbtx(ctx),
 			`INSERT INTO teachers (code, name, phone, subject, rate_cents, active, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7)
-			 RETURNING id`,
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			v.Code, v.Name, v.Phone, v.Subject, v.RateCents, v.Active, v.CreatedAt,
 		)
+		if err != nil {
+			return err
+		}
+		v.ID = newID
+		return nil
 	}
 
-	res, err := t.dbtx(ctx).ExecContext(ctx,
+	query := t.dialect.Rebind(
 		`UPDATE teachers SET
-			name = $1, phone = $2, subject = $3, rate_cents = $4, active = $5
-		 WHERE id = $6`,
+			name = ?, phone = ?, subject = ?, rate_cents = ?, active = ?
+		 WHERE id = ?`,
+	)
+	res, err := t.dbtx(ctx).ExecContext(ctx, query,
 		v.Name, v.Phone, v.Subject, v.RateCents, v.Active, v.ID,
 	)
 	if err != nil {
@@ -102,10 +109,10 @@ func (t *TeacherStore) Delete(ctx context.Context, idOrCode string) error {
 		args  []any
 	)
 	if numID, err := strconv.ParseInt(idOrCode, 10, 64); err == nil && numID > 0 {
-		query = "DELETE FROM teachers WHERE id = $1 OR code = $2"
+		query = t.dialect.Rebind("DELETE FROM teachers WHERE id = ? OR code = ?")
 		args = []any{numID, idOrCode}
 	} else {
-		query = "DELETE FROM teachers WHERE code = $1"
+		query = t.dialect.Rebind("DELETE FROM teachers WHERE code = ?")
 		args = []any{idOrCode}
 	}
 
